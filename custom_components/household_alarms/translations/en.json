@@ -1,0 +1,12 @@
+{
+  "title": "HA-AlarmClock",
+  "config": {
+    "step": {
+      "user": {
+        "title": "HA-AlarmClock",
+        "description": "Create speaker alarms from your dashboard. Existing alarms are not imported or changed. New alarms are disabled until you enable them. Home Assistant and the selected speaker must be available."
+      }
+    },
+    "abort": {"already_configured": "HA-AlarmClock is already configured."}
+  }
+}

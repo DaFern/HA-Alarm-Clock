@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HA-AlarmClock offline browser fixture</title>
+<style>body{background:#111;color:#eee;font:15px system-ui;margin:16px;--primary-text-color:#eee;--secondary-text-color:#aaa;--primary-color:#7897ff;--secondary-background-color:#242424;--card-background-color:#191919;--divider-color:#444;max-width:800px}#results{white-space:pre-wrap}</style>
+<script src="file:///homeassistant/custom_components/household_alarms/frontend/household-alarms-card.js"></script></head><body>
+<div id="app"></div><pre id="results">RUNNING</pre><script>
+(async () => {
+  const results = [];
+  const test = (name, condition) => { if (!condition) throw new Error(name); results.push(name); };
+  const flush = async () => { for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0)); };
+  const deep = (v) => JSON.parse(JSON.stringify(v));
+  const calls = [], confirms = [];
+  let confirmation = true, subscriber, nextId = 1;
+  window.confirm = (text) => { confirms.push(text); return confirmation; };
+  window.attacked = false;
+  const defaults = { name: "New alarm", person: "", enabled: false, time: "07:00", mode: "weekdays", weekdays: [0,1,2,3,4], date: "", calendar: "", speaker: "", tone: "chime", start_volume:20, max_volume:60, volume_step:10, repeat_seconds:60, snooze_enabled:true, snooze_minutes:5, max_snoozes:3, deadline:"", allow_sleep_in:false, notify_enabled:true, notify_service:"", bedtime_entity:"", briefing_enabled:false, agent:"", instructions:"Be brief and use supplied facts.", weather:"", tts:"", language:"", voice:"" };
+  defaults.schedule_enabled=false; defaults.schedule_calendars=[];
+  defaults.briefing_words=100; defaults.schedule_include=''; defaults.schedule_exclude='';
+  const data = {revision:0, alarms:[], defaults, warnings:[], notify_services:["notify.adults"], test_results:{}};
+  const push = () => subscriber?.(deep(data));
+  const states = Object.fromEntries([
+    ["media_player.bedroom_speaker","Bedroom Speaker"], ["media_player.lottie_s_speaker","Lottie's Speaker"],
+    ["tts.piper","Piper"], ["conversation.jarvis","JARVIS"], ["weather.home_weather","Home weather"],
+    ["calendar.school_holidays","School holidays"], ["input_boolean.charlottes_bedtime","Charlotte bedtime"],
+  ].map(([id,name]) => [id,{entity_id:id,state:"idle",attributes:{friendly_name:name}}]));
+  const hass = {states, connection:{subscribeMessage:async (handler) => { subscriber=handler; queueMicrotask(push); return () => {subscriber=null;}; }}, callWS:async (message) => {
+    calls.push(deep(message));
+    if (message.type === "household_alarms/list") return deep(data);
+    if (message.type === "tts/engine/get") return {provider:{supported_languages:["en_GB","en_US"]}};
+    if (message.type === "tts/engine/voices") return {voices:[{voice_id:"en_GB-alan-medium",name:"Alan"}]};
+    if (message.type === "household_alarms/save") {
+      if (message.expected_revision !== data.revision) throw new Error("Settings changed elsewhere. Reload before saving.");
+      const alarm = {...deep(message.config),id:message.alarm_id || `alarm-${nextId++}`,run:null,next:null};
+      const index = data.alarms.findIndex((a) => a.id === alarm.id);
+      if (index < 0) data.alarms.push(alarm); else data.alarms[index]=alarm;
+      data.revision++; push(); return {alarm_id:alarm.id,revision:data.revision};
+    }
+    if (message.type === "household_alarms/delete") { data.alarms=data.alarms.filter((a) => a.id !== message.alarm_id); data.revision++; push(); return {}; }
+    if (message.type === "household_alarms/preview") return {text:"Good morning, sir. The temperature is 10 degrees."};
+    if (message.type === "household_alarms/test") return {status:"accepted"};
+    if (message.type === "household_alarms/action") return {};
+    throw new Error("Unexpected command " + message.type);
+  }};
+  const card = document.createElement("household-alarms-card");
+  card.setConfig({type:"custom:household-alarms-card"}); card.hass=hass;
+  document.querySelector("#app").append(card);
+  const q = (selector) => card.shadowRoot.querySelector(selector);
+  const click = async (action) => { q(`[data-action="${action}"]`).click(); await flush(); };
+  const set = async (field,value) => {
+    const input=q(`[data-field="${field}"]`);
+    if (input.type === "checkbox") input.checked=value; else input.value=value;
+    input.dispatchEvent(new Event(input.tagName === "SELECT" || input.type === "checkbox" ? "change" : "input",{bubbles:true}));
+    await flush();
+  };
+  try {
+    await flush();
+    test("empty list renders", q("#list").textContent.includes("No alarms yet"));
+    await click("new");
+    test("new alarms start off with one switch", !card._draft.enabled && q('#editor .power').getAttribute('aria-checked') === 'false');
+    test("duplicate enable checkbox was removed", !q('[data-field="enabled"]'));
+    test("generic form has no preset family or assistant", !q('#people option') && !card._draft.agent && !card._draft.weather && !card._draft.tts);
+    test("advanced options start collapsed", !q('[data-section="more"]').open);
+    test("speaker selection is explicit", card._draft.speaker === "");
+    await set("speaker","media_player.lottie_s_speaker");
+    await set("person","Charlotte");
+    test("repeat choices omit school and weekend presets", ![...q('[data-field="mode"]').options].some((option) => /school|weekend|holiday/i.test(option.textContent)));
+    await set("mode","weekdays");
+    test("choose days shows weekday choices", q('[data-day="0"]') && q('[data-day="4"]'));
+    await set('calendar','calendar.school_holidays');
+    test("calendar choice shows clear event rules", q('[data-field="calendar_rule"]') && q('[data-field="calendar_filters"]'));
+    test("calendar rule explains matching days", q('#editor').textContent.includes('Write one word or phrase per line') && q('#editor').textContent.includes('Matching ignores capital letters'));
+    await set('calendar_filters','School holiday\nInset day');
+    test("calendar phrases are saved separately", card._draft.calendar_filters === 'School holiday\nInset day' && card._draft.schedule_include === '');
+    await set('calendar_rule','allow');
+    test("calendar allow choice is clearly labelled", [...q('[data-field="calendar_rule"]').options].some((option) => option.textContent === 'Only ring on matching days'));
+    test("calendar allow choice asks for a phrase", q('[data-field="calendar_filters"]').required);
+    await set('calendar_rule','block');
+    q('[data-section="more"] summary').click(); await flush();
+    await set('tts','tts.piper');
+    test("provider language list loads", [...q('[data-field="language"]').options].some((o) => o.value === "en_GB"));
+    await set("language","en_GB");
+    test("installed Piper voices load", [...q('[data-field="voice"]').options].some((o) => o.value === "en_GB-alan-medium"));
+    await set("voice","en_GB-alan-medium");
+    test('more settings stays open after choosing a voice', q('[data-section="more"]').open);
+    await set('agent','conversation.jarvis');
+    await set('weather','weather.home_weather');
+    await set("briefing_enabled",true);
+    test('schedule is off until explicitly chosen', !q('[data-field="schedule_enabled"]').checked && !q('[data-schedule-calendar]'));
+    test('instruction box allows 10000 characters', q('[data-field="instructions"]').maxLength === 10000);
+    await set('briefing_words','300');
+    test('message length is stored as a number', card._draft.briefing_words === 300);
+    await set('schedule_enabled',true);
+    test('calendar picker starts with nothing selected', [...card.shadowRoot.querySelectorAll('[data-schedule-calendar]')].every((input) => !input.checked));
+    const calendarChoice=q('[data-schedule-calendar="calendar.school_holidays"]');
+    calendarChoice.checked=true; calendarChoice.dispatchEvent(new Event('change',{bubbles:true})); await flush();
+    test('only explicitly selected calendar is included', card._draft.schedule_calendars.length===1 && card._draft.schedule_calendars[0]==='calendar.school_holidays');
+    await set('schedule_include','Work\nDentist');
+    await set('schedule_exclude','Cancelled');
+    test('filters have clear precedence guidance', q('#editor').textContent.includes('Exclusions always win'));
+    await set("name",'School <img src=x onerror="window.attacked=true">');
+    await set("notify_service","notify.adults");
+    test('alert purpose is explained without jargon', q('#editor').textContent.includes('Let someone know') && q('#editor').textContent.includes('speaker cannot play the alarm') && !q('#editor').textContent.includes('playback failure'));
+    test('notification choices have readable names', q('[data-field="notify_service"]').selectedOptions[0].textContent === 'Adults');
+    const focus=q('[data-field="name"]'); focus.focus(); const typed=focus.value;
+    push(); await flush();
+    test("runtime updates preserve editor and focus", q('[data-field="name"]') === focus && focus.value === typed);
+    await click("preview");
+    test("briefing preview renders without audio request", q("#preview").textContent.includes("Good morning") && !calls.some((c) => c.type === "household_alarms/test"));
+    q("form").dispatchEvent(new Event("submit",{bubbles:true,cancelable:true})); await flush();
+    test("create saves selected speaker and voice", data.alarms[0].speaker === "media_player.lottie_s_speaker" && data.alarms[0].voice === "en_GB-alan-medium");
+    test("created alarm remains disabled", !data.alarms[0].enabled);
+    test('schedule settings are saved per alarm', data.alarms[0].schedule_enabled && data.alarms[0].schedule_calendars.length===1);
+    test('length and filters are saved per alarm', data.alarms[0].briefing_words===300 && data.alarms[0].schedule_include==='Work\nDentist' && data.alarms[0].schedule_exclude==='Cancelled');
+    const editRect=q('[data-action="edit"]').getBoundingClientRect();
+    const testRect=q('[data-action="test"]').getBoundingClientRect();
+    const deleteRect=q('[data-action="delete"]').getBoundingClientRect();
+    test('Edit and Test fill one row equally', Math.abs(editRect.width-testRect.width)<1 && editRect.top===testRect.top && deleteRect.top>testRect.top && deleteRect.width>testRect.width*1.9);
+    test('one short Test button replaces separate tests', q('[data-action="test"]').textContent==='Test' && !q('[data-action="test-briefing"]'));
+    test("alarm labels are HTML-escaped", !q("#list img") && !window.attacked);
+    confirmation=false;
+    const before=calls.filter((c) => c.type === "household_alarms/test").length;
+    await click("test");
+    test("cancelled sound test sends no command", calls.filter((c) => c.type === "household_alarms/test").length === before);
+    confirmation=true; await click("test");
+    test("confirmed sound test explicitly authorises playback", calls.findLast((c) => c.type === "household_alarms/test").confirmation === "PLAY");
+    test('Test requests a full cycle', calls.findLast((c) => c.type === 'household_alarms/test').briefing === false && confirms.some((t) => t.includes('sound and morning message')));
+    test("sound test names speaker and volume", confirms.some((t) => t.includes("Lottie's Speaker") && t.includes("20%")));
+    await click("edit");
+    await set('name','Unsaved name');
+    q('#editor .power').click(); await flush();
+    test('one live switch changes the saved alarm and editor', data.alarms[0].enabled && card._draft.enabled && q('#editor .power').getAttribute('aria-checked') === 'true');
+    test('switch preserves other unsaved edits', card._draft.name === 'Unsaved name' && data.alarms[0].name !== 'Unsaved name');
+    q('form').dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})); await flush();
+    test('saving edits never turns the alarm back off', data.alarms[0].enabled && data.alarms[0].name === 'Unsaved name');
+    await click('edit');
+    const editRevision=card._editRevision;
+    data.revision++; push(); await flush();
+    await set("name","Unsaved correction");
+    q("form").dispatchEvent(new Event("submit",{bubbles:true,cancelable:true})); await flush();
+    test("stale editor uses original revision and retains draft", calls.findLast((c) => c.type === "household_alarms/save").expected_revision === editRevision && card._draft.name === "Unsaved correction");
+    test("conflict is visible and never blindly retried", q("#message").textContent.includes("changed elsewhere"));
+    await click("cancel");
+    confirmation=false; await click("delete");
+    test("cancelled deletion preserves alarm", data.alarms.length === 1);
+    confirmation=true;
+    const toggle=q("#list .power"); toggle.click(); await flush();
+    test("list switch shows actual saved state", !data.alarms[0].enabled && q('#list .power').getAttribute('aria-checked') === 'false');
+    data.alarms[0].run={status:"ringing",snoozes:3,escalated:true}; push(); await flush();
+    test("active school alarm has dismiss but no sleep-in", !!q('[data-action="dismiss"]') && !q('[data-action="sleep_in"]'));
+    test("deadline / snooze limit disables snooze", q('[data-action="snooze"]').disabled);
+    test("editing and disabling active alarm are blocked", !q('[data-action="edit"]') && q("#list .power").disabled);
+    data.alarms[0].run=null; push(); await flush();
+    await click("edit");
+    test("mobile layout does not overflow", document.documentElement.scrollWidth <= window.innerWidth + 1);
+    document.querySelector("#results").textContent=JSON.stringify({status:"PASS",count:results.length,tests:results});
+  } catch (error) {
+    document.querySelector("#results").textContent=JSON.stringify({status:"FAIL",count:results.length,error:error.stack,tests:results});
+  }
+})();
+</script></body></html>

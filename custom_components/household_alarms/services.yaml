@@ -1,0 +1,51 @@
+snooze:
+  name: "Snooze an alarm"
+  description: "Snooze one active alarm without exceeding its get-up deadline."
+  fields:
+    alarm_id:
+      name: "Alarm ID"
+      required: true
+      selector:
+        text:
+dismiss:
+  name: "Dismiss an alarm"
+  description: "Stop repeats and pending snoozes for one alarm. This does not clear bedtime."
+  fields:
+    alarm_id:
+      name: "Alarm ID"
+      required: true
+      selector:
+        text:
+sleep_in:
+  name: "Sleep in"
+  description: "Dismiss an alarm only when sleeping in is permitted. Never allowed for school-day alarms."
+  fields:
+    alarm_id:
+      name: "Alarm ID"
+      required: true
+      selector:
+        text:
+dismiss_person:
+  name: "Dismiss a person's alarms"
+  description: "Dismiss only this person's active alarms and pending snoozes. Intended for a confirmed wake-up automation."
+  fields:
+    person:
+      name: "Person"
+      required: true
+      selector:
+        text:
+get_active:
+  name: "Find active alarms"
+  description: "Read active and snoozed alarms without changing them. Returns count and alarms, including IDs, names, people, speakers and group members. If several match, your automation must choose which alarm to control."
+  fields:
+    person:
+      name: "Person (optional)"
+      description: "Only include this person's alarms."
+      selector:
+        text:
+    speaker:
+      name: "Speaker (optional)"
+      description: "Only include alarms on this speaker or a group containing it."
+      selector:
+        entity:
+          domain: media_player
