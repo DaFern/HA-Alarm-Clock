@@ -109,6 +109,10 @@ class RuleTests(unittest.TestCase):
     def test_new_alarm_disabled(self):
         self.assertFalse(model.validate(config())["enabled"])
 
+    def test_help_alerts_default_off(self):
+        self.assertFalse(model.validate(config())["notify_enabled"])
+        self.assertTrue(model.validate(config(notify_enabled=True))["notify_enabled"])
+
     def test_legacy_defaults_and_larger_instructions(self):
         alarm = model.validate(config(instructions='x' * 10000))
         self.assertEqual(len(alarm['instructions']), 10000)
@@ -1028,7 +1032,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(other.runs[alarm_id]["snoozes"], 1)
 
     async def test_deadline_escalates_snoozed_alarm_and_alerts_once(self):
-        alarm_id = await self.create(enabled=True, mode="school", deadline="07:30", notify_service="notify.adults")
+        alarm_id = await self.create(enabled=True, mode="school", deadline="07:30", notify_enabled=True, notify_service="notify.adults")
         self.manager.runs[alarm_id] = run_at(self.now, status="snoozed", next_ring=(self.now + timedelta(hours=1)).isoformat())
         self.manager._deliver = AsyncMock()
         self.now += timedelta(minutes=30)
@@ -1244,7 +1248,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('notify', [c[0] for c in self.hass.services.calls])
 
     async def test_unavailable_speaker_alerts_and_keeps_run_active(self):
-        alarm_id = await self.create(notify_service="notify.adults")
+        alarm_id = await self.create(notify_enabled=True, notify_service="notify.adults")
         self.manager.runs[alarm_id] = run_at(self.now)
         self.hass.states.set("media_player.lottie", "unavailable")
         await self.manager._deliver(alarm_id)

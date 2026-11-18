@@ -2,6 +2,7 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HA-AlarmClock offline browser fixture</title>
 <style>body{background:#111;color:#eee;font:15px system-ui;margin:16px;--primary-text-color:#eee;--secondary-text-color:#aaa;--primary-color:#7897ff;--secondary-background-color:#242424;--card-background-color:#191919;--divider-color:#444;max-width:800px}#results{white-space:pre-wrap}</style>
+<script>customElements.define('ha-selector', class extends HTMLElement { value = undefined; selector = undefined; hass = undefined; required = false; });</script>
 <script src="../custom_components/household_alarms/frontend/household-alarms-card.js"></script></head><body>
 <div id="app"></div><pre id="results">RUNNING</pre><script>
 (async () => {
@@ -29,7 +30,7 @@
   let confirmation = true, subscriber, nextId = 1;
   window.confirm = (text) => { confirms.push(text); return confirmation; };
   window.attacked = false;
-  const defaults = { name: "New alarm", person: "", enabled: false, time: "07:00", mode: "weekdays", weekdays: [0,1,2,3,4], date: "", calendar: "", calendar_rule:'block',calendar_filters:'', speaker: "", tone: "chime", start_volume:20, max_volume:60, volume_step:10, repeat_seconds:60, snooze_enabled:true, snooze_minutes:5, max_snoozes:3, deadline:"", allow_sleep_in:false, notify_enabled:true, notify_service:"", bedtime_entity:"", briefing_enabled:false, assistant_id:"", instructions:"Be brief and use supplied facts.", weather:"" };
+  const defaults = { name: "New alarm", person: "", enabled: false, time: "07:00", mode: "weekdays", weekdays: [0,1,2,3,4], date: "", calendar: "", calendar_rule:'block',calendar_filters:'', speaker: "", tone: "chime", start_volume:20, max_volume:60, volume_step:10, repeat_seconds:60, snooze_enabled:true, snooze_minutes:5, max_snoozes:3, deadline:"", allow_sleep_in:false, notify_enabled:false, notify_service:"", bedtime_entity:"", briefing_enabled:false, assistant_id:"", instructions:"Be brief and use supplied facts.", weather:"" };
   defaults.schedule_enabled=false; defaults.schedule_calendars=[];
   defaults.briefing_words=100; defaults.schedule_include=''; defaults.schedule_exclude='';
   defaults.clear_sleep_on_dismiss=false;
@@ -93,8 +94,13 @@
   const mode = async (group,value) => { q(`[data-mode-group="${group}"][data-mode="${value}"]`).click(); await flush(); };
   const set = async (field,value) => {
     const input=q(`[data-field="${field}"]`);
-    if (input.type === "checkbox") input.checked=value; else input.value=value;
-    input.dispatchEvent(new Event(input.tagName === "SELECT" || input.type === "checkbox" ? "change" : "input",{bubbles:true}));
+    if (input.matches('ha-selector[data-entity-selector]')) {
+      input.value=value;
+      input.dispatchEvent(new CustomEvent('value-changed',{detail:{value},bubbles:true,composed:true}));
+    } else {
+      if (input.type === "checkbox") input.checked=value; else input.value=value;
+      input.dispatchEvent(new Event(input.tagName === "SELECT" || input.type === "checkbox" ? "change" : "input",{bubbles:true}));
+    }
     await flush();
   };
   try {
@@ -103,6 +109,12 @@
     test('experimental panel removed and card load never plays', !q('[data-music-field="enabled"]') && !q('[data-action="music-start"]') && !calls.some((c) => c.type==='household_alarms/music_start'));
     await click("new");
     test("new alarms start off with one switch", !card._draft.enabled && q('#editor .power').getAttribute('aria-checked') === 'false');
+    test('help alerts are off by default', card._draft.notify_enabled === false && !q('[data-field="notify_enabled"]').checked);
+    test('entity fields use HA domain-filtered searchable selectors', ['speaker','calendar','bedtime_entity'].every((field) => {
+      const selector=q(`[data-field="${field}"]`);
+      const domain={speaker:'media_player',calendar:'calendar',bedtime_entity:'input_boolean'}[field];
+      return selector.localName==='ha-selector' && selector.selector.entity.filter.domain===domain && selector.hass===hass;
+    }) && q('[data-field="speaker"]').required && !q('[data-field="calendar"]').required);
     test("duplicate enable checkbox was removed", !q('[data-field="enabled"]'));
     test("generic form has no preset family or assistant", !q('#people option') && !card._draft.assistant_id && !card._draft.weather);
     test("each advanced section starts collapsed", ["wake-limits","phone-controls","help-alerts","sleep-switch"].every((id) => !q(`[data-section="${id}"]`).open));
@@ -113,7 +125,7 @@
     await set('snooze_enabled',true);
     test('snooze controls return without losing draft values', !!q('[data-field="snooze_minutes"]') && !!q('[data-field="max_snoozes"]') && card._draft.snooze_minutes===5);
     test("speaker selection is explicit", card._draft.speaker === "");
-    test('speaker options include unambiguous entity IDs', [...q('[data-field="speaker"]').options].some((o) => o.textContent.includes('media_player.lottie_s_speaker')));
+    test('speaker selector is domain-filtered', q('[data-field="speaker"]').selector.entity.filter.domain==='media_player');
     test('sound mode selector maps Tone, Music and Voice only', q('[data-mode-group="sound"][aria-pressed="true"]').dataset.mode==='tone' && ['Tone','Music','Voice only'].every((label) => [...qAll('[data-mode-group="sound"]')].some((button) => button.textContent===label)));
     const savedTone=card._draft.tone;
     await mode('sound','music');
@@ -126,6 +138,7 @@
     test('switching sound modes restores the draft tone', card._draft.tone===savedTone && !card._draft.music_enabled);
     test('phone controls default off and hide their destination', !card._draft.phone_enabled && !q('[data-field="phone_service"]') && !q('[data-field="phone_wake_screen"]'));
     await set("speaker","media_player.lottie_s_speaker");
+    test('speaker selector changes update the draft', card._draft.speaker==='media_player.lottie_s_speaker' && q('[data-field="speaker"]').value==='media_player.lottie_s_speaker');
     await set("person","Charlotte");
     test("repeat choices omit school and weekend presets", ![...q('[data-field="mode"]').options].some((option) => /school|weekend|holiday/i.test(option.textContent)));
     await set("mode","weekdays");
@@ -135,7 +148,7 @@
     q('[data-day="5"]').click(); await flush();
     test('weekday button can be deselected without changing other days', !q('[data-day="5"]').checked && !card._draft.weekdays.includes(5) && card._draft.weekdays.includes(0));
     await set('calendar','calendar.school_holidays');
-    test("calendar choice shows clear optional calendar rules", q('[data-field="calendar"]') && q('[data-field="calendar"]').closest('label').textContent.includes('Calendar rules (optional)') && q('[data-field="calendar_rule"]') && q('[data-field="calendar_filters"]'));
+    test("calendar choice shows clear optional calendar rules", q('[data-field="calendar"]').getAttribute('label') === 'Calendar rules (optional)' && card._draft.calendar === 'calendar.school_holidays' && q('[data-field="calendar_rule"]') && q('[data-field="calendar_filters"]'));
     test("calendar rule explains matching days", q('#editor').textContent.includes('Write one word or phrase per line') && q('#editor').textContent.includes('Matching ignores capital letters'));
     await set('calendar_filters','School holiday\nInset day');
     test("calendar phrases are saved separately", card._draft.calendar_filters === 'School holiday\nInset day' && card._draft.schedule_include === '');
@@ -156,6 +169,7 @@
     test('manual voice controls are retired', !q('[data-field="tts"]') && !q('[data-field="language"]') && !q('[data-field="voice"]') && !q('[data-field="agent"]'));
     await set('assistant_id','pipeline-jarvis');
     test('assistant-written mode maps to existing briefing setting', card._draft.briefing_enabled && q('[data-field="instructions"]') && q('[data-field="weather"]'));
+    test('weather location uses the HA searchable entity selector', q('[data-field="weather"]').localName==='ha-selector' && q('[data-field="weather"]').selector.entity.filter.domain==='weather');
     await mode('message','greeting');
     test('Simple greeting preserves assistant selection and disables generated briefing', card._draft.assistant_id==='pipeline-jarvis' && !card._draft.briefing_enabled && !q('[data-field="instructions"]'));
     await mode('message','assistant');

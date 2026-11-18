@@ -27,6 +27,7 @@ class HouseholdAlarmsCard extends HTMLElement {
     this.shadowRoot.addEventListener("click", (event) => this._click(event));
     this.shadowRoot.addEventListener("input", (event) => this._input(event));
     this.shadowRoot.addEventListener("change", (event) => this._change(event));
+    this.shadowRoot.addEventListener("value-changed", (event) => this._entityChanged(event));
     this.shadowRoot.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && event.target.hasAttribute("data-track-query")) {
         event.preventDefault();
@@ -106,8 +107,39 @@ class HouseholdAlarmsCard extends HTMLElement {
   }
 
   _entity(field, label, domain, optional = true) {
-    return this._select(field, label, this._choices(domain).map((state) => [state.entity_id,
-      (state.attributes.friendly_name || state.entity_id) + (domain === "media_player" ? " — " + state.entity_id : "") + (["unavailable", "unknown"].includes(state.state) ? " (unavailable)" : "")]), optional);
+    return `<ha-selector data-field="${esc(field)}" data-entity-selector data-entity-domain="${esc(domain)}" label="${esc(label)}"></ha-selector>`;
+  }
+
+  _configureEntitySelectors() {
+    for (const selector of this.shadowRoot.querySelectorAll("ha-selector[data-entity-selector]")) {
+      const field = selector.dataset.field;
+      const domain = selector.dataset.entityDomain;
+      const value = this._draft[field] || "";
+      const missing = value && !this._hass?.states?.[value];
+      selector.hass = this._hass;
+      selector.selector = { entity: { filter: { domain }, ...(missing ? { extra_options: [{ id: value, primary: value, secondary: "Not currently available" }] } : {}) } };
+      selector.value = value || undefined;
+      selector.required = field === "speaker";
+      selector.disabled = this._busy;
+      selector.placeholder = value ? undefined : "None";
+    }
+  }
+
+  _entityChanged(event) {
+    const selector = event.target;
+    const field = selector.dataset?.field;
+    if (!field || !this._draft) return;
+    const value = event.detail?.value || "";
+    this._draft[field] = value;
+    if (field === "speaker") {
+      this._draft.music_track = ""; this._draft.music_track_name = ""; this._draft.music_server = "";
+      this._tracks = []; this._trackStatus = ""; this._trackError = false; this._choosingTrack = false;
+      this._renderEditor();
+    } else if (["calendar", "bedtime_entity"].includes(field)) {
+      if (field === "calendar" && !value && this._draft.calendar_rule === "allow") this._draft.calendar_rule = "block";
+      if (field === "bedtime_entity" && !value) this._draft.clear_sleep_on_dismiss = false;
+      this._renderEditor();
+    }
   }
 
   _field(field, label, type = "text", extra = "") {
@@ -176,6 +208,7 @@ class HouseholdAlarmsCard extends HTMLElement {
     this._renderEditor();
     this._renderMusic();
     this._showMessage();
+    this._configureEntitySelectors();
   }
 
   _renderList() {
@@ -296,6 +329,7 @@ class HouseholdAlarmsCard extends HTMLElement {
       <div id="editor-message" class="notice" role="alert" aria-live="assertive" hidden></div>
       <div class="actions"><button class="primary" type="submit" ${this._busy ? "disabled" : ""}>${this._busy ? "Working…" : "Save alarm"}</button><button type="button" data-action="cancel" ${this._busy ? "disabled" : ""}>Cancel</button></div></form>`;
     this._showMessage();
+    this._configureEntitySelectors();
   }
 
   _showMessage() {
@@ -363,6 +397,7 @@ class HouseholdAlarmsCard extends HTMLElement {
   _change(event) {
     const input = event.target;
     if (!this._draft) return;
+    if (input.matches?.("ha-selector[data-entity-selector]")) return;
     if (input.dataset.scheduleCalendar) {
       const selected = this._draft.schedule_calendars || [];
       this._draft.schedule_calendars = input.checked ? [...new Set([...selected, input.dataset.scheduleCalendar])] : selected.filter((entity) => entity !== input.dataset.scheduleCalendar);
@@ -415,7 +450,7 @@ class HouseholdAlarmsCard extends HTMLElement {
   async _operation(work) {
     if (this._busy) return;
     this._busy = true;
-    this.shadowRoot.querySelectorAll("button, form input, form select, form textarea").forEach((element) => { element.disabled = true; });
+    this.shadowRoot.querySelectorAll("button, form input, form select, form textarea, form ha-selector").forEach((element) => { element.disabled = true; });
     this._messageError = false;
     try { await work(); }
     catch (error) { this._message = error.message || "Operation failed. Check the alarm list before retrying."; this._messageError = true; }

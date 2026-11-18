@@ -23,7 +23,7 @@ DEFAULTS = {
     "start_volume": 20, "max_volume": 60, "volume_step": 10,
     "repeat_seconds": 60, "snooze_enabled": True, "snooze_minutes": 5,
     "max_snoozes": 3, "deadline": "", "allow_sleep_in": False,
-    "notify_enabled": True, "notify_service": "",
+    "notify_enabled": False, "notify_service": "",
     "phone_enabled": False, "phone_service": "", "phone_wake_screen": True,
     "bedtime_entity": "", "clear_sleep_on_dismiss": False, "briefing_enabled": False,
     "assistant_id": "", "instructions": "Give a short, friendly good morning message. Include the supplied time and weather. Do not make up information.",
