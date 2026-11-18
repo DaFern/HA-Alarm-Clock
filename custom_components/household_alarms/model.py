@@ -19,6 +19,7 @@ DEFAULTS = {
     "speaker": "", "tone": "chime",
     "music_enabled": False, "music_track": "", "music_track_name": "", "music_server": "",
     "music_gain": 25, "speech_delay": 0,
+    "music_ramp_enabled": False, "music_ramp_step": 5, "music_ramp_seconds": 30,
     "start_volume": 20, "max_volume": 60, "volume_step": 10,
     "repeat_seconds": 60, "snooze_enabled": True, "snooze_minutes": 5,
     "max_snoozes": 3, "deadline": "", "allow_sleep_in": False,
@@ -77,13 +78,14 @@ def validate(data: dict, alarm_id: str | None = None, *, require_speaker: bool =
         result[key] = "\n".join(phrases)
     if not result["name"]:
         raise AlarmError("Give the alarm a name")
-    for key in ("enabled", "snooze_enabled", "allow_sleep_in", "notify_enabled", "briefing_enabled", "schedule_enabled", "clear_sleep_on_dismiss", "music_enabled", "phone_enabled", "phone_wake_screen"):
+    for key in ("enabled", "snooze_enabled", "allow_sleep_in", "notify_enabled", "briefing_enabled", "schedule_enabled", "clear_sleep_on_dismiss", "music_enabled", "music_ramp_enabled", "phone_enabled", "phone_wake_screen"):
         if type(result[key]) is not bool:
             raise AlarmError(f"Invalid {key}")
     limits = {
         "start_volume": (1, 100), "max_volume": (1, 100), "volume_step": (0, 25),
         "repeat_seconds": (30, 300), "snooze_minutes": (1, 30), "max_snoozes": (0, 10),
         "music_gain": (1, 30), "speech_delay": (0, 120),
+        "music_ramp_step": (1, 25), "music_ramp_seconds": (30, 300),
     }
     for key, (low, high) in limits.items():
         value = result[key]

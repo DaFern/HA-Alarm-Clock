@@ -8,9 +8,20 @@ See the [morning deployment handoff](../../docs/DEPLOYMENT_HANDOFF.md) for the
 current stop point and step-by-step transfer/build/verification sequence. Do not
 uninstall DEV before the replacement is tested and its data backed up.
 
+### Project-only ramp extension (not in the current DEV pin)
+
+Issue #3 adds optional `volume_ramp` capability and an ownership-checked
+`player_queues/alarm_volume` command to the project templates. Regenerating this
+recipe includes the extension; old generated contexts do not. The published
+`7aab695...` DEV fork below does **not** include it. Existing ramp-off alarms
+remain compatible; ramp-enabled alarms reject a server missing that capability
+before generating speech or dispatching playback. Publishing an updated fork or
+building/updating the packaged companion needs separate approval. Offline checks
+do not constitute authenticated API startup or a physical ramp test.
+
 ### Temporary compatible DEV route
 
-The same protocol-2 source is now published in the MA fork at
+The earlier protocol-2 source (without the ramp extension) was published in the MA fork at
 `DaFern/server@7aab695417cea5d0fdf926620724cfd873ef1c22`.
 The user approved retaining DEV temporarily, avoiding the local-package transfer
 until a convenient migration window. Back up HA+DEV before changing DEV's

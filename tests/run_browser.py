@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 
 fixture = Path(__file__).with_name("browser.html")
-for width in (390, 1280):
+for width in (320, 390, 620, 1280):
     profile = tempfile.mkdtemp(prefix=f"household-alarms-browser-{width}-", dir="/data/v2/cache/opencode")
     args = ["/usr/bin/chromium", "--headless", "--no-sandbox", "--disable-gpu",
             "--disable-dev-shm-usage", "--allow-file-access-from-files", "--no-first-run",

@@ -3,7 +3,7 @@
     async def alarm_capabilities(self, queue_id: str) -> dict[str, Any]:
         """Versioned scheduled-alarm contract; legacy test APIs are not sufficient."""
         result = await self.briefing_test_capabilities(queue_id)
-        return {**result, "protocol": 2, "features": ["selected_track", "speech_delay", "music_only"]}
+        return {**result, "protocol": 2, "features": ["selected_track", "speech_delay", "music_only", "volume_ramp"]}
 
     @api_command("player_queues/alarm_start", required_scope=Scope.QUEUES_CONTROL)
     @handle_play_action
@@ -65,7 +65,70 @@
 
     @api_command("player_queues/alarm_control", required_scope=Scope.QUEUES_CONTROL)
     @handle_play_action
-    async def alarm_control(self, queue_id: str, run_id: str, action: str) -> dict[str, Any]:
+    async def alarm_control(
+        self, queue_id: str, run_id: str, action: str, volume_level: int | None = None,
+    ) -> dict[str, Any]:
         """Keep exact queue/session ownership checks shared with the tested controls."""
+        if volume_level is not None:
+            if action != "restart" or type(volume_level) is not int or not 1 <= volume_level <= 100:
+                raise InvalidDataError("Only a stopped alarm restart can reset volume (1-100)")
+        if action == "restart":
+            status = await self.briefing_test_control(queue_id, run_id, "status")
+            if not status["owned"]:
+                return {**status, "protocol": 2}
+            if status["state"] != PlaybackState.IDLE.value:
+                raise InvalidDataError("Stop the alarm before resetting its ring volume")
+            mixer = self.mass.streams.audio.briefings
+            data = self._queue_data[queue_id]
+            owner = mixer.owner(queue_id, run_id, data.session_id)
+            assert owner is not None
+            if volume_level is not None:
+                owner.update(volume_level=volume_level, ramp_suspended=False)
+            elif owner.get("ramp_checked"):
+                player = self.mass.players.get_player(queue_id)
+                assert player is not None
+                actual = player.state.volume_level
+                if type(actual) is not int or not 0 <= actual <= 100:
+                    raise InvalidDataError("Check the speaker volume before restarting its song")
+                if actual != owner["volume_level"]:
+                    owner.update(volume_level=actual, ramp_suspended=True, original_volume=None)
+            mixer.bind_owner(queue_id, data.session_id, owner)
         result = await self.briefing_test_control(queue_id, run_id, action)
         return {**result, "protocol": 2}
+
+    @api_command("player_queues/alarm_volume", required_scope=Scope.QUEUES_CONTROL)
+    @handle_play_action
+    async def alarm_volume(
+        self, queue_id: str, run_id: str, volume_level: int | None = None,
+    ) -> dict[str, Any]:
+        """Check ownership and manual changes under the queue lock, without replaying media."""
+        self._check_player_permission(queue_id)
+        if volume_level is not None and (type(volume_level) is not int or not 1 <= volume_level <= 100):
+            raise InvalidDataError("Alarm volume must be between 1 and 100 percent")
+        status = await self.briefing_test_control(queue_id, run_id, "status")
+        if not status["owned"]:
+            return {**status, "protocol": 2}
+        mixer = self.mass.streams.audio.briefings
+        data = self._queue_data[queue_id]
+        owner = mixer.owner(queue_id, run_id, data.session_id)
+        player = self.mass.players.get_player(queue_id)
+        assert owner is not None
+        assert player is not None
+        owner["ramp_checked"] = True
+        mixer.bind_owner(queue_id, data.session_id, owner)
+        actual = player.state.volume_level
+        if type(actual) is not int or not 0 <= actual <= 100 or actual != owner["volume_level"]:
+            # A manual change owns the level now, including at the next song loop.
+            # Never restore the old pre-alarm level over that manual choice.
+            owner.update(ramp_suspended=True, original_volume=None)
+            if type(actual) is int and 0 <= actual <= 100:
+                owner["volume_level"] = actual
+            mixer.bind_owner(queue_id, data.session_id, owner)
+        suspended = bool(owner.get("ramp_suspended"))
+        if volume_level is not None and not suspended and status["state"] == PlaybackState.PLAYING.value:
+            owner["volume_level"] = volume_level
+            # Record intent before dispatch: an uncertain response is never retried.
+            mixer.bind_owner(queue_id, data.session_id, owner)
+            await self.mass.players.cmd_volume_set(queue_id, volume_level)
+            actual = volume_level
+        return {**status, "protocol": 2, "volume_level": actual, "suspended": suspended}

@@ -8,6 +8,21 @@ acceptance-testing notes.
 
 ## Current candidate: 0.7.0b2
 
+### Project-only follow-up: timed music-volume ramp (issue #3)
+
+The working tree adds an opt-in ramp with separate percentage-point and elapsed
+interval settings, capped at Maximum volume. It changes speaker volume without
+restarting the song or replaying speech. Snooze resets the ramp; manual volume
+changes pause it for that ring. Tone repeat timing is labelled separately and
+existing alarms retain their behaviour unless the ramp is enabled.
+
+**Not deployed or physically verified.** This needs the updated companion's
+`volume_ramp` capability and ownership-checked volume command; the current pinned
+DEV commit below does not provide it. HA and companion updates require separate
+approval. Offline checks passed 282 Python tests and 100 browser checks at each
+width (390 and 1280); the ramp controls were visually reviewed in the offline
+fixture. These checks do not prove Echo volume reporting or audible ramp timing.
+
 ### Deployed follow-up: 0.7.0b2
 
 The working tree now contains clearer song selection/search feedback and optional
@@ -43,8 +58,8 @@ acceptance. Screen wake/lock-screen visibility, Sleep in, deadline escalation,
 takeover and restart recovery still need live checks. Earlier connection resets
 remain unexplained; the rescheduling fix does not repair that separate failure.
 Leave DEV and its data installed until the replacement is verified. The intermittent
-Echo song/chapter restart remains unreproduced and unfixed; the timed music-volume
-ramp and clearer sound labels remain deferred in issue #3.
+Echo song/chapter restart remains unreproduced and unfixed. Issue #3's timed
+music-volume ramp is prepared in the project only, as described above.
 
 Offline tests are in `tests/`:
 

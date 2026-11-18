@@ -61,7 +61,7 @@ def candidates(checkout):
     text = replace_once(text,
         "from music_assistant.helpers.uri import parse_uri\n",
         "from music_assistant.helpers.one_shot_briefing import (\n"
-        "    MixLevels, PreparedBriefing, prepare_briefing,\n)\n"
+         "    MixLevels,\n    PreparedBriefing,\n    prepare_briefing,\n)\n"
         "from music_assistant.helpers.plugin_engines import get_tts_engines\n"
         "from music_assistant.helpers.uri import parse_uri\n")
     text = replace_once(text,

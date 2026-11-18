@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 import uuid
 
 from .assistants import resolve_assistant
@@ -30,6 +31,64 @@ async def capabilities(client, queue_id):
     if not isinstance(result, dict) or result.get("protocol") != PROTOCOL or not FEATURES <= set(result.get("features", [])):
         raise AlarmError("Music alarms require the compatible pinned HA-AlarmClock MA companion (protocol 2)")
     return result
+
+
+def require_ramp(alarm, ready):
+    if alarm.get("music_ramp_enabled") and "volume_ramp" not in ready.get("features", []):
+        raise AlarmError("Timed volume increases need the updated MA companion (volume_ramp). Turn off the ramp or update the companion")
+
+
+class MusicVolumeRamp:
+    """One ring's timer: no elapsed-time catch-up and no media commands.
+
+    The companion checks the exact playback owner and detects manual volume
+    changes before each write. A failed write suspends this ring, not its music.
+    """
+
+    def __init__(self, alarm, client, queue_id, run_id, *, clock=time.monotonic, suspended=False):
+        self.alarm, self.client, self.queue_id, self.run_id = alarm, client, queue_id, run_id
+        self.clock = clock
+        self.suspended = suspended
+        self.level = None
+        self.next_at = clock() + alarm["music_ramp_seconds"]
+
+    async def tick(self):
+        if not self.alarm.get("music_ramp_enabled"):
+            return None
+        try:
+            # Keep observing even after suspension, so further manual changes
+            # remain authoritative across natural song repeats and cleanup.
+            status = await command(self.client, "player_queues/alarm_volume",
+                queue_id=self.queue_id, run_id=self.run_id, timeout=15)
+            if not isinstance(status, dict) or status.get("protocol") != PROTOCOL or not status.get("owned"):
+                raise AlarmError("Music volume ownership was not confirmed")
+            level = status.get("volume_level")
+            if type(status.get("suspended")) is not bool or status["suspended"] or type(level) is not int or not 0 <= level <= 100:
+                self.suspended = True
+                return "Music volume changed or is unavailable; automatic increases are paused for this ring."
+            self.level = level
+            if self.suspended:
+                return None
+            if status.get("state") != "playing":
+                self.next_at = self.clock() + self.alarm["music_ramp_seconds"]
+                return None
+            now = self.clock()
+            if now < self.next_at or level >= self.alarm["max_volume"]:
+                return None
+            target = min(self.alarm["max_volume"], level + self.alarm["music_ramp_step"])
+            result = await command(self.client, "player_queues/alarm_volume", queue_id=self.queue_id,
+                run_id=self.run_id, volume_level=target, timeout=15)
+            if (not isinstance(result, dict) or result.get("protocol") != PROTOCOL or not result.get("owned")
+                    or result.get("suspended") or result.get("volume_level") != target):
+                raise AlarmError("Music volume increase was not confirmed")
+            self.level = target
+            self.next_at = self.clock() + self.alarm["music_ramp_seconds"]
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self.suspended = True
+            return "Music volume increase was not confirmed; further increases are paused for this ring. Music was not restarted."
+        return None
 
 
 async def search_tracks(hass, speaker, query, *, resolver=resolve_client, server_resolver=resolve_server_id):
@@ -105,6 +164,7 @@ class AlarmMusic:
         try:
             if not self.submitted:
                 ready = await capabilities(self.client, self.queue_id)
+                require_ramp(self.alarm, ready)
                 if ready.get("ready") is not True:
                     raise AlarmError("; ".join(ready.get("reasons", [])) or "The music speaker is not ready")
                 message, engine, pipeline = "", "", None
@@ -133,6 +193,9 @@ class AlarmMusic:
                     await self._persist(music_blocked=True)
                     raise AlarmError("The Music Assistant connection changed during message preparation; playback was not started")
                 await self._persist(music_attempt=self.attempt)
+                if self.alarm.get("music_ramp_enabled"):
+                    await self._persist(music_ramp_suspended=False)
+                    self.manager.warnings.pop(f"volume:{self.alarm['id']}", None)
                 # Once persisted, even a timeout/cancellation is an uncertain dispatch.
                 self.submitted = True
                 result = await command(self.client, "player_queues/alarm_start", queue_id=self.queue_id,
@@ -140,17 +203,27 @@ class AlarmMusic:
                     tts_engine=engine, language=pipeline.tts_language if pipeline else None,
                     voice=pipeline.tts_voice if pipeline else None, music_gain=self.alarm["music_gain"] / 100,
                     speech_delay=self.alarm["speech_delay"],
-                    volume_level=round(volume(self.alarm, self.run["cycles"], self.run.get("escalated", False)) * 100))
+                    volume_level=round(volume(self.alarm, 0 if self.alarm.get("music_ramp_enabled") else self.run["cycles"], self.run.get("escalated", False)) * 100))
                 if not isinstance(result, dict) or result.get("protocol") != PROTOCOL or result.get("status") != "playing":
                     raise AlarmError("Music Assistant did not confirm the alarm start")
                 await self._persist(error="", cycles=self.run["cycles"] + 1)
                 self.manager.changed()
+            elif self.alarm.get("music_ramp_enabled"):
+                require_ramp(self.alarm, await capabilities(self.client, self.queue_id))
+            ramp = MusicVolumeRamp(self.alarm, self.client, self.queue_id, self.attempt,
+                suspended=self.run.get("music_ramp_suspended", False))
             while True:
                 state = await self.control("status")
                 if not state["owned"]:
                     self.takeover = True
                     await self._persist(music_blocked=True, music_attempt=None, error="Music playback changed elsewhere. Other audio was left alone; dismiss this alarm to finish.")
                     return
+                warning = await ramp.tick()
+                if ramp.suspended and not self.run.get("music_ramp_suspended"):
+                    await self._persist(music_ramp_suspended=True)
+                if warning and self.manager.warnings.get(f"volume:{self.alarm['id']}") != warning:
+                    self.manager.warnings[f"volume:{self.alarm['id']}"] = warning
+                    self.manager.changed()
                 if state.get("state") == "idle":
                     # MA checks ownership again under its queue lock. Speech is not rearmed.
                     restarted = await self.control("restart")

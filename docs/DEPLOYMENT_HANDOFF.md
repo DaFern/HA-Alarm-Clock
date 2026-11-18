@@ -1,5 +1,38 @@
 # Morning handoff — 2026-11-18
 
+## Project-only follow-up: timed music-volume ramp (issue #3)
+
+The user approved the implementation scope, not live activation. The working tree
+now includes an opt-in timed music-volume ramp, separate step/interval settings,
+clear tone-repeat labels, and shared logic for saved-alarm Tests and scheduled
+music. Existing alarms default off and keep their prior behaviour. Snooze resets
+starting volume/timer; manual changes suspend that ring's ramp; natural loops
+preserve the current level; deadline escalation stays at the maximum. Unknown
+volume/uncertain writes suspend increases without media restart or blind retry.
+Persisted suspension survives HA reattachment, and downtime never produces a
+catch-up burst. Provider volume reporting still needs physical validation.
+
+Safe volume changes require the **new project companion extension**, advertising
+`volume_ramp` and exposing `player_queues/alarm_volume`. It checks exact
+run/session/item/source/group ownership under the queue lock, preserves manual
+levels and uses the native volume command without media dispatch. Protocol 2
+remains backward compatible for ramp-off clients; enabling the ramp against the
+currently deployed `7aab695...` fork is rejected before message/playback dispatch.
+The pinned image recipe includes the new templates when regenerated, but existing
+generated build contexts and the published DEV fork do not gain them automatically.
+
+Validation: **282 Python tests passed**, including real MA-helper/FFmpeg tests;
+**100 Chromium checks passed at each of 390/1280px**; offline ramp screenshots
+were visually reviewed; targeted Ruff/mypy checks passed on the complete generated
+companion controller/helper in a disposable source copy. No authenticated test of
+the new command, physical ramp, live change, restart, MA publication or migration
+occurred. The prior successful Kitchen acceptance below did not test this ramp.
+
+Next: review the project diff, then separately approve publication of both project
+and updated MA fork (or an image build), live HA/MA updates and required restarts.
+Only then opt a test alarm into the ramp and verify timing/cap, manual override,
+Snooze/reset, Dismiss, takeover and deadline behaviour audibly. Keep issue #3 open.
+
 ## Latest: same-day rescheduling deployed and Kitchen alarm cycle passed
 
 This section supersedes the older acceptance-pending statements below, which

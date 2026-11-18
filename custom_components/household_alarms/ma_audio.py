@@ -158,9 +158,9 @@ class MusicTests:
         self.manager.changed()
         return self.snapshot()
 
-    async def _control(self, action):
+    async def _control(self, action, **extra):
         result = await self._send("player_queues/briefing_test_control", queue_id=self.queue_id,
-                                  run_id=self.session["id"], action=action)
+                                  run_id=self.session["id"], action=action, **extra)
         if not isinstance(result, dict) or result.get("protocol") != self.protocol:
             raise AlarmError("MA returned an incompatible test-control response")
         return result
@@ -171,11 +171,12 @@ class MusicTests:
                 check, self.client, self.queue_id, pipeline, engine_uid = await self.async_check(
                     self.session["speaker"], alarm["assistant_id"])
             else:
-                from .music import capabilities
+                from .music import capabilities, require_ramp
                 self.client, self.queue_id = self.resolver(self.manager.hass, self.session["speaker"])
                 if resolve_server_id(self.manager.hass, self.session["speaker"]) != alarm["music_server"]:
                     raise AlarmError("The Music Assistant connection changed. Reselect this alarm's song before testing")
                 check = await capabilities(self.client, self.queue_id)
+                require_ramp(alarm, check)
                 pipeline, engine_uid = None, ""
                 if alarm["assistant_id"] or alarm["briefing_enabled"]:
                     pipeline = resolve_assistant(self.manager.hass, alarm["assistant_id"], voice=True)
@@ -218,6 +219,10 @@ class MusicTests:
                 raise AlarmError("MA did not confirm a compatible music-test start")
             self.session.update(status="playing", message="Listen for music under the message. Acceptance does not prove it was audible.")
             self.manager.changed()
+            ramp = None
+            if self.selected and alarm.get("music_ramp_enabled"):
+                from .music import MusicVolumeRamp
+                ramp = MusicVolumeRamp(alarm, self.client, self.queue_id, self.session["id"], clock=self.clock)
             expires = self.clock() + 1800
             snooze_until = 0
             while self.desired not in ("dismissed", "sleeping_in") and self.clock() < expires:
@@ -237,15 +242,23 @@ class MusicTests:
                     self.manager.changed()
                 elif self.session["status"] == "snoozed" and self.clock() >= snooze_until:
                     self.desired = "playing"
-                    restarted = await self._control("restart")
+                    extra = {"volume_level": alarm["start_volume"]} if ramp else {}
+                    restarted = await self._control("restart", **extra)
                     if not restarted.get("owned"):
                         raise AlarmError("The test no longer owns this playback")
                     self.session.update(status="playing", message="Music only. The morning message will not repeat.")
+                    if ramp:
+                        ramp = MusicVolumeRamp(alarm, self.client, self.queue_id, self.session["id"], clock=self.clock)
                     self.manager.changed()
-                elif self.session["status"] == "playing" and status.get("state") == "idle":
-                    restarted = await self._control("restart")
-                    if not restarted.get("owned"):
-                        raise AlarmError("The test no longer owns this playback")
+                elif self.session["status"] == "playing":
+                    warning = await ramp.tick() if ramp else None
+                    if warning and self.session["message"] != warning:
+                        self.session["message"] = warning
+                        self.manager.changed()
+                    if status.get("state") == "idle":
+                        restarted = await self._control("restart")
+                        if not restarted.get("owned"):
+                            raise AlarmError("The test no longer owns this playback")
                 try:
                     await asyncio.wait_for(self.event.wait(), timeout=2)
                 except TimeoutError:

@@ -72,6 +72,44 @@ Automated tests use fakes, not a real phone or push gateway.
 
 ## Scheduled selected-song alarms (deployed candidate; acceptance pending)
 
+### Timed volume increases (project-only follow-up; issue #3)
+
+Under **More settings → Volume and repeats**, music alarms can opt into
+**Gradually increase music volume**. **Increase by (percentage points)** is
+1–25, **Increase every (seconds)** is 30–300, and the shared **Maximum volume (%)**
+caps increases. For example, starting at 20%, adding 5 points every 30 seconds
+with a 50% maximum requests 25%, 30%, 35% and so on, without restarting media or
+replaying the message. Background music gain remains a separate mixing setting.
+
+The ramp defaults off; existing alarm settings and legacy per-ring increases stay
+unchanged. Tone alarms retain their repeat behaviour with explicit tone-specific
+labels. With the ramp on, every resumed ring starts at Starting volume; Snooze
+stops its timer, then starts a fresh timer and music-only ring. Natural song loops
+retain the current level. Deadline escalation still takes precedence at Maximum
+volume. Dismiss, Sleep in and takeover cancel future increases through the normal
+playback lifecycle. A manual volume change detected by MA suspends increases for
+the ring, is preserved across natural song loops, and disables old-volume restoration
+over that choice. Unavailable volume or uncertain writes also suspend increases;
+the ramp does not restart media or blindly retry an uncertain volume write.
+
+Timing uses a monotonic clock and the existing two-second playback poll: increases
+may be late, never applied in a catch-up burst. A reattached run starts a fresh
+interval at its current level; a persisted suspension stays suspended. An MA restart
+that loses ownership does not create a replacement alarm. Manual-change detection
+depends on the provider's reported volume and cannot detect changes it does not
+report, or changes away and back between observations. Physical Echo testing is
+still required; optimistic MA state is not proof of audible output or exact timing.
+
+The saved-alarm Test uses the same ramp helper and explicitly confirms its settings,
+without changing the saved schedule. The optional capability `volume_ramp` and
+`player_queues/alarm_volume` endpoint are added to the project companion templates.
+The currently deployed fork `7aab695...` lacks them: enabling the new ramp against
+that fork fails before briefing generation/playback, rather than using unsafe generic
+volume services. Ramp-off alarms remain compatible with the existing fork.
+**Neither this follow-up nor the companion extension has been deployed/published.**
+Offline validation passed 282 Python tests, 100 Chromium checks at both 390/1280px,
+and targeted generated-companion Ruff/mypy checks; offline screenshots were reviewed.
+
 Each alarm now has an opt-in **Music** section: select its MA speaker, search
 that server's song library, choose a song, and save its background gain (1–30%)
 and voice delay (0–120 seconds). Changing speaker clears the song selection:

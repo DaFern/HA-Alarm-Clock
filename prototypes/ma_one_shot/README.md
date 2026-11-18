@@ -133,6 +133,17 @@ persisted first-attempt guard is still required across restarts.
 
 ### Companion manual-test protocol
 
+Project follow-up for issue #3: protocol 2 optionally advertises `volume_ramp`.
+`alarm_volume(queue_id, run_id, volume_level=None)` reads/checks the exact owned
+session under the playback lock and optionally changes only its volume. Manual
+changes/unknown levels suspend writes and prevent restoring an older level over
+the user's choice; natural restarts preserve the manual level. An explicit stopped
+`alarm_control(..., action="restart", volume_level=...)` resets a snoozed test's
+ring volume and suspension without rearming speech. The HA ramp handles interval,
+step, cap and persisted suspension; it never catches up missed intervals. All new
+API calls require queue-control scope and player permission. The templates are
+project-only: the published `7aab695...` fork does not have this extension.
+
 All three `player_queues/briefing_test_*` commands require `QUEUES_CONTROL`, a
 player permission check, and the existing re-entrant playback lock:
 

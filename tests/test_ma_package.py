@@ -68,7 +68,7 @@ class PackageTests(unittest.TestCase):
         source = (ROOT / 'prototypes/ma_one_shot/alarm_commands.py.txt').read_text()
         tree = ast.parse('class Host:\n' + source)
         methods = [node for node in tree.body[0].body if isinstance(node, ast.AsyncFunctionDef)]
-        self.assertEqual(len(methods), 3)
+        self.assertEqual(len(methods), 4)
         for method in methods:
             self.assertTrue(any('Scope.QUEUES_CONTROL' in ast.unparse(node) for node in method.decorator_list))
 

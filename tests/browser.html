@@ -35,6 +35,7 @@
   defaults.clear_sleep_on_dismiss=false;
   Object.assign(defaults,{music_enabled:false,music_track:'',music_track_name:'',music_server:'',music_gain:25,speech_delay:0});
   Object.assign(defaults,{phone_enabled:false,phone_service:'',phone_wake_screen:true});
+  Object.assign(defaults,{music_ramp_enabled:false,music_ramp_step:5,music_ramp_seconds:30});
   const data = {revision:0, alarms:[], defaults, assistants:[{id:'pipeline-jarvis',name:'JARVIS morning voice'}], warnings:[], notify_services:["notify.adults"], test_results:{}};
   data.phone_targets=[{service:'notify.mobile_app_android_phone',android:true},{service:'notify.mobile_app_iphone',android:false}];
   const push = () => subscriber?.(deep(data));
@@ -87,7 +88,9 @@
   card.setConfig({type:"custom:household-alarms-card"}); card.hass=hass;
   document.querySelector("#app").append(card);
   const q = (selector) => card.shadowRoot.querySelector(selector);
+  const qAll = (selector) => [...card.shadowRoot.querySelectorAll(selector)];
   const click = async (action) => { q(`[data-action="${action}"]`).click(); await flush(); };
+  const mode = async (group,value) => { q(`[data-mode-group="${group}"][data-mode="${value}"]`).click(); await flush(); };
   const set = async (field,value) => {
     const input=q(`[data-field="${field}"]`);
     if (input.type === "checkbox") input.checked=value; else input.value=value;
@@ -102,17 +105,37 @@
     test("new alarms start off with one switch", !card._draft.enabled && q('#editor .power').getAttribute('aria-checked') === 'false');
     test("duplicate enable checkbox was removed", !q('[data-field="enabled"]'));
     test("generic form has no preset family or assistant", !q('#people option') && !card._draft.assistant_id && !card._draft.weather);
-    test("advanced options start collapsed", !q('[data-section="more"]').open);
+    test("each advanced section starts collapsed", ["wake-limits","phone-controls","help-alerts","sleep-switch"].every((id) => !q(`[data-section="${id}"]`).open));
+    test('collapsed sections include useful short summaries', q('[data-section="wake-limits"] summary').textContent.includes('latest wake-up time') && q('[data-section="phone-controls"] summary').textContent.includes('Companion phone') && q('[data-section="help-alerts"] summary').textContent.includes('where to send') && q('[data-section="sleep-switch"] summary').textContent.includes('switch is off'));
+    test('latest wake-up time appears once under wake-up limits', qAll('[data-field="deadline"]').length===1 && q('[data-field="deadline"]').closest('[data-section="wake-limits"]'));
+    await set('snooze_enabled',false);
+    test('snooze length and count hide when snooze is off but deadline remains', !q('[data-field="snooze_minutes"]') && !q('[data-field="max_snoozes"]') && !!q('[data-field="deadline"]'));
+    await set('snooze_enabled',true);
+    test('snooze controls return without losing draft values', !!q('[data-field="snooze_minutes"]') && !!q('[data-field="max_snoozes"]') && card._draft.snooze_minutes===5);
     test("speaker selection is explicit", card._draft.speaker === "");
     test('speaker options include unambiguous entity IDs', [...q('[data-field="speaker"]').options].some((o) => o.textContent.includes('media_player.lottie_s_speaker')));
-    test('phone controls default off and stay separate from help alerts', !card._draft.phone_enabled && !q('[data-field="phone_service"]'));
+    test('sound mode selector maps Tone, Music and Voice only', q('[data-mode-group="sound"][aria-pressed="true"]').dataset.mode==='tone' && ['Tone','Music','Voice only'].every((label) => [...qAll('[data-mode-group="sound"]')].some((button) => button.textContent===label)));
+    const savedTone=card._draft.tone;
+    await mode('sound','music');
+    test('Music mode sets existing music setting and reveals its controls', card._draft.music_enabled && !!q('[data-track-query]') && !!q('[data-field="music_ramp_enabled"]'));
+    await mode('sound','voice');
+    test('Voice only maps to tone fallback and keeps its repeat-volume controls', card._draft.tone==='none' && !card._draft.music_enabled && q('#editor').textContent.includes('Choose a morning message') && q('[data-field="repeat_seconds"]') && q('[data-field="volume_step"]').closest('label').textContent.includes('tone fallback'));
+    q('form').dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})); await flush();
+    test('Voice-only validation stays beside Save and preserves the draft', q('#editor-message').textContent.includes('Choose a morning message') && q('#editor-message').getAttribute('role')==='alert' && card._draft.tone==='none');
+    await mode('sound','tone');
+    test('switching sound modes restores the draft tone', card._draft.tone===savedTone && !card._draft.music_enabled);
+    test('phone controls default off and hide their destination', !card._draft.phone_enabled && !q('[data-field="phone_service"]') && !q('[data-field="phone_wake_screen"]'));
     await set("speaker","media_player.lottie_s_speaker");
     await set("person","Charlotte");
     test("repeat choices omit school and weekend presets", ![...q('[data-field="mode"]').options].some((option) => /school|weekend|holiday/i.test(option.textContent)));
     await set("mode","weekdays");
-    test("choose days shows weekday choices", q('[data-day="0"]') && q('[data-day="4"]'));
+    test("choose days shows native checkbox toggle buttons", q('[data-day="0"]') && q('[data-day="4"]') && q('[data-day="0"]').type==='checkbox' && q('[data-day="0"]').closest('.day-option').classList.contains('selected') && !q('[data-day="6"]').closest('.day-option').classList.contains('selected'));
+    q('[data-day="5"]').click(); await flush();
+    test('weekday button selection updates the saved draft and highlight', q('[data-day="5"]').checked && q('[data-day="5"]').closest('.day-option').classList.contains('selected') && card._draft.weekdays.includes(5));
+    q('[data-day="5"]').click(); await flush();
+    test('weekday button can be deselected without changing other days', !q('[data-day="5"]').checked && !card._draft.weekdays.includes(5) && card._draft.weekdays.includes(0));
     await set('calendar','calendar.school_holidays');
-    test("calendar choice shows clear event rules", q('[data-field="calendar_rule"]') && q('[data-field="calendar_filters"]'));
+    test("calendar choice shows clear optional calendar rules", q('[data-field="calendar"]') && q('[data-field="calendar"]').closest('label').textContent.includes('Calendar rules (optional)') && q('[data-field="calendar_rule"]') && q('[data-field="calendar_filters"]'));
     test("calendar rule explains matching days", q('#editor').textContent.includes('Write one word or phrase per line') && q('#editor').textContent.includes('Matching ignores capital letters'));
     await set('calendar_filters','School holiday\nInset day');
     test("calendar phrases are saved separately", card._draft.calendar_filters === 'School holiday\nInset day' && card._draft.schedule_include === '');
@@ -120,19 +143,25 @@
     test("calendar allow choice is clearly labelled", [...q('[data-field="calendar_rule"]').options].some((option) => option.textContent === 'Only ring on matching days'));
     test("calendar allow choice asks for a phrase", q('[data-field="calendar_filters"]').required);
     await set('calendar_rule','block');
-    q('[data-section="more"] summary').click(); await flush();
+    q('[data-section="sleep-switch"] summary').click(); await flush();
     test('sleep dismissal option is hidden without a switch', !q('[data-field="clear_sleep_on_dismiss"]'));
     await set('bedtime_entity','input_boolean.charlottes_bedtime');
-    test('sleep dismissal is opt-in', !q('[data-field="clear_sleep_on_dismiss"]').checked);
+    test('sleep dismissal is opt-in', !q('[data-field="clear_sleep_on_dismiss"]').checked && q('[data-field="clear_sleep_on_dismiss"]').closest('label').textContent.includes('Turn off on dismissal'));
     await set('clear_sleep_on_dismiss',true);
     await set('bedtime_entity','');
     test('unlinking sleep switch clears and hides dismissal option', !card._draft.clear_sleep_on_dismiss && !q('[data-field="clear_sleep_on_dismiss"]'));
+    await mode('message','assistant');
+    test('morning message selector offers Off, Simple greeting and Assistant-written', q('[data-mode-group="message"][aria-pressed="true"]').dataset.mode==='assistant' && ['Off','Simple greeting','Assistant-written'].every((label) => [...qAll('[data-mode-group="message"]')].some((button) => button.textContent===label)));
     test('assistant picker lists named pipelines, not conversation entities', [...q('[data-field="assistant_id"]').options].some((o) => o.value==='pipeline-jarvis' && o.textContent==='JARVIS morning voice') && ![...q('[data-field="assistant_id"]').options].some((o) => o.value==='conversation.jarvis'));
     test('manual voice controls are retired', !q('[data-field="tts"]') && !q('[data-field="language"]') && !q('[data-field="voice"]') && !q('[data-field="agent"]'));
     await set('assistant_id','pipeline-jarvis');
-    test('more settings stays open after choosing assistant', q('[data-section="more"]').open);
+    test('assistant-written mode maps to existing briefing setting', card._draft.briefing_enabled && q('[data-field="instructions"]') && q('[data-field="weather"]'));
+    await mode('message','greeting');
+    test('Simple greeting preserves assistant selection and disables generated briefing', card._draft.assistant_id==='pipeline-jarvis' && !card._draft.briefing_enabled && !q('[data-field="instructions"]'));
+    await mode('message','assistant');
+    test('switching back restores assistant-written draft fields', card._draft.assistant_id==='pipeline-jarvis' && card._draft.briefing_enabled && !!q('[data-field="instructions"]'));
+    test('sleep switch section stays open after choosing assistant', q('[data-section="sleep-switch"]').open);
     await set('weather','weather.home_weather');
-    await set("briefing_enabled",true);
     test('schedule is off until explicitly chosen', !q('[data-field="schedule_enabled"]').checked && !q('[data-schedule-calendar]'));
     test('instruction box allows 10000 characters', q('[data-field="instructions"]').maxLength === 10000);
     await set('briefing_words','300');
@@ -145,7 +174,14 @@
     await set('schedule_include','Work\nDentist');
     await set('schedule_exclude','Cancelled');
     test('filters have clear precedence guidance', q('#editor').textContent.includes('Exclusions always win'));
+    await mode('message','off');
+    test('Off hides spoken-message controls but keeps choices in the draft', !q('[data-field="assistant_id"]') && !q('[data-field="instructions"]') && card._draft.schedule_enabled && !card._draft.assistant_id);
+    await mode('message','assistant');
+    test('returning to Assistant-written restores assistant and schedule draft', card._draft.assistant_id==='pipeline-jarvis' && card._draft.schedule_enabled && !!q('[data-schedule-calendar]'));
     await set("name",'School <img src=x onerror="window.attacked=true">');
+    await set('notify_enabled',false);
+    test('help destination is hidden when help alerts are off', !q('[data-field="notify_service"]'));
+    await set('notify_enabled',true);
     await set("notify_service","notify.adults");
     test('alert purpose is explained without jargon', q('#editor').textContent.includes('Let someone know') && q('#editor').textContent.includes('speaker cannot play the alarm') && !q('#editor').textContent.includes('playback failure'));
     test('notification choices have readable names', q('[data-field="notify_service"]').selectedOptions[0].textContent === 'Adults');
@@ -196,9 +232,27 @@
     const editRect=q('[data-action="edit"]').getBoundingClientRect();
     const testRect=q('[data-action="test"]').getBoundingClientRect();
     const deleteRect=q('[data-action="delete"]').getBoundingClientRect();
-    test('Edit and Test fill one row equally', Math.abs(editRect.width-testRect.width)<1 && editRect.top===testRect.top && deleteRect.top>testRect.top && deleteRect.width>testRect.width*1.9);
-    test('one short Test button replaces separate tests', q('[data-action="test"]').textContent==='Test' && !q('[data-action="test-briefing"]'));
+    const switchRect=q('.alarm-tools .power').getBoundingClientRect();
+    test('icon action targets are 44px', Math.round(editRect.width)===44 && Math.round(testRect.width)===44 && Math.round(deleteRect.width)===44);
+    test('alarm switch hit target is 44px', Math.round(switchRect.width)===44);
+    test('visible icon face is smaller than its hit target', parseFloat(getComputedStyle(q('[data-action="edit"]'),'::before').width)<editRect.width);
+    test('icon actions expose names, tooltips and visible SVGs', q('[data-action="edit"]').getAttribute('aria-label').includes('Edit School') && q('[data-action="edit"]').title.includes('Edit School') && q('[data-action="test"] svg') && q('[data-action="delete"] svg') && !q('[data-action="edit"]').textContent.trim());
+    test('compact header has no intro copy or redundant person', !q('#list').textContent.includes('Choose when and where') && !q('#list').textContent.includes('Charlotte'));
+    test('weekday schedule summary and next occurrence are concise', q('.alarm-meta').textContent.includes('Weekdays') && q('.alarm-meta').textContent.includes("Lottie's Speaker") && [...qAll('.alarm-meta')].some((node) => node.textContent.startsWith('Next ')));
+    test('immediate switch has an alarm-specific accessible label', q('#list .power').getAttribute('aria-label')==='Turn School <img src=x onerror="window.attacked=true"> on');
     test("alarm labels are HTML-escaped", !q("#list img") && !window.attacked);
+    data.alarms[0].next='2026-11-18T07:30:00Z';
+    data.alarms[0].deadline='07:45'; push(); await flush();
+    test('next occurrence and deadline share compact metadata', [...qAll('.alarm-meta')].some((node) => node.textContent.includes('Next ') && node.textContent.includes('Get up by 07:45')));
+    data.alarms[0].run={status:'dismissed',snoozes:0,error:'Music Assistant did not confirm playback. Full error detail.'}; push(); await flush();
+    test('playback warning starts as one collapsed line', q('.playback-warning summary').textContent==='Playback needs attention' && !q('.playback-warning').open && !q('.playback-warning p').hidden);
+    q('.playback-warning summary').click(); await flush();
+    test('expanding warning reveals full error', q('.playback-warning').open && q('.playback-warning p').textContent.includes('Full error detail'));
+    data.alarms[0].run=null; push(); await flush();
+    const narrowActions=q('.alarm-tools').getBoundingClientRect();
+    const actionColumns=getComputedStyle(q('.alarm-tools')).gridTemplateColumns.split(' ').length;
+    if (q('ha-card').getBoundingClientRect().width<=520) test('narrow card keeps details beside a two-by-two control grid', actionColumns===2 && narrowActions.left>q('.alarm-copy').getBoundingClientRect().left && narrowActions.right<=q('.alarm').getBoundingClientRect().right+1);
+    else test('wide card keeps details beside one compact control row', actionColumns===4 && narrowActions.left>q('.alarm-copy').getBoundingClientRect().left && narrowActions.right<=q('.alarm').getBoundingClientRect().right+1);
     confirmation=false;
     const before=calls.filter((c) => c.type === "household_alarms/test").length;
     await click("test");
@@ -220,7 +274,7 @@
     await set("name","Unsaved correction");
     q("form").dispatchEvent(new Event("submit",{bubbles:true,cancelable:true})); await flush();
     test("stale editor uses original revision and retains draft", calls.findLast((c) => c.type === "household_alarms/save").expected_revision === editRevision && card._draft.name === "Unsaved correction");
-    test("conflict is visible and never blindly retried", q("#message").textContent.includes("changed elsewhere"));
+    test("save conflict appears beside Save and never retries automatically", q("#editor-message").textContent.includes("changed elsewhere") && !q("#message").textContent && q('#editor-message').classList.contains('error'));
     await click("cancel");
     confirmation=false; await click("delete");
     test("cancelled deletion preserves alarm", data.alarms.length === 1);
@@ -235,7 +289,16 @@
     await click("edit");
     test("mobile layout does not overflow", document.documentElement.scrollWidth <= window.innerWidth + 1);
     test('existing alarm music remains disabled', !card._draft.music_enabled);
-    await set('music_enabled',true);
+    test('tone repeat label is explicit', q('[data-field="repeat_seconds"]').closest('label').textContent.includes('Repeat tone every'));
+    test('maximum volume label is explicit', q('[data-field="max_volume"]').closest('label').textContent.includes('Maximum speaker volume (%)'));
+    await mode('sound','music');
+    test('music ramp defaults off and hides tone-repeat timing', !card._draft.music_ramp_enabled && !q('[data-field="repeat_seconds"]') && !q('[data-field="music_ramp_seconds"]'));
+    const legacyStep=card._draft.volume_step, legacyRepeat=card._draft.repeat_seconds;
+    await set('music_ramp_enabled',true);
+    test('music ramp has separate units and timing, with maximum volume revealed last', q('[data-field="music_ramp_step"]').closest('label').textContent.includes('Increase by (percentage points)') && q('[data-field="music_ramp_seconds"]').closest('label').textContent.includes('Every (seconds)') && q('[data-field="max_volume"]').closest('label').textContent.includes('Maximum speaker volume (%)') && !!(q('[data-field="music_ramp_seconds"]').compareDocumentPosition(q('[data-field="max_volume"]')) & Node.DOCUMENT_POSITION_FOLLOWING) && !q('[data-field="volume_step"]'));
+    await set('music_ramp_step',5); await set('music_ramp_seconds',30);
+    test('ramp edits preserve legacy tone settings', card._draft.volume_step===legacyStep && card._draft.repeat_seconds===legacyRepeat);
+    test('ramp explains uninterrupted song and manual override', q('#editor').textContent.includes('does not restart music') && q('#editor').textContent.includes('changing volume yourself pauses'));
     const songQuery=q('[data-track-query]'); songQuery.value='Test'; songQuery.dispatchEvent(new Event('input',{bubbles:true}));
     await click('search-tracks');
     test('search targets selected speaker and does not play', calls.findLast((c) => c.type==='household_alarms/tracks').speaker===card._draft.speaker && !calls.some((c) => c.type==='household_alarms/music_start'));
@@ -272,6 +335,7 @@
     test('screen wake can be independently disabled', !card._draft.phone_wake_screen && q('#editor').textContent.includes('Anyone holding the phone'));
     await card._save(); await flush();
     test('song gain and delay persisted together', data.alarms[0].music_track==='library://track/42' && data.alarms[0].music_gain===20 && data.alarms[0].speech_delay===12);
+    test('ramp opt-in and timing save with selected song', data.alarms[0].music_ramp_enabled && data.alarms[0].music_ramp_step===5 && data.alarms[0].music_ramp_seconds===30);
     test('phone preference recipient and wake option persist per alarm', data.alarms[0].phone_enabled && data.alarms[0].phone_service==='notify.mobile_app_android_phone' && !data.alarms[0].phone_wake_screen);
     const alarmsBeforeMusic=JSON.stringify(data.alarms), revisionBeforeMusic=data.revision;
     const priorTests=calls.filter((c) => c.type==='household_alarms/test').length;
@@ -279,6 +343,7 @@
     test('cancelled music confirmation sends no playback request', calls.filter((c) => c.type==='household_alarms/test').length===priorTests);
     confirmation=true; await click('test');
     test('music confirmation names volume gain delay and timeout', confirms.some((t) => t.includes("Lottie's Speaker") && t.includes('20% music gain') && t.includes('12 seconds') && t.includes('30 minutes')));
+    test('music confirmation warns about enabled volume increases', confirms.some((t) => t.includes('5 percentage points every 30 seconds') && t.includes('up to 60%')));
     test('preparing test offers dismiss but no premature snooze', !!q('[data-action="music-dismiss"]') && q('[data-action="music-snooze"]').disabled);
     test('test track metadata is escaped', !q('#music-test img') && !window.attacked);
     data.music_test.status='playing'; push(); await flush();
@@ -298,7 +363,14 @@
       q('#music-test').scrollIntoView();
     }
     if (new URLSearchParams(location.search).has('preview')) await click('preview');
-    if (new URLSearchParams(location.search).has('review')) {
+    if (new URLSearchParams(location.search).get('review')==='list') {
+      card._draft=null;
+      data.alarms[0]={...data.alarms[0],name:'Jarvis Alarm',person:'Sir',enabled:true,time:'07:30',mode:'weekdays',weekdays:[0,1,2,3,4],speaker:'media_player.lottie_s_speaker',deadline:'07:45',next:'2026-11-18T07:30:00Z',run:{status:'dismissed',snoozes:0,error:'Music Assistant did not confirm the operation. Check the speaker and companion build.'}};
+      data.alarms.push({...deep(data.alarms[0]),id:'alarm-test',name:'Test Alarm',person:'',time:'09:17',deadline:'',run:null});
+      card._data=deep(data);
+      card._renderList(); card._renderEditor(); card._renderMusic();
+      const reviewStyle=document.createElement('style'); reviewStyle.textContent='#editor,#music-test,body>#results{display:none!important}'; card.shadowRoot.append(reviewStyle); document.querySelector('#results').hidden=true; window.scrollTo(0,0);
+    } else if (new URLSearchParams(location.search).has('review')) {
       card._draft=null; card._edit(data.alarms[0]);
       card._draft.music_track_name='Example song — Example artist'; card._renderEditor();
       q('[data-field="music_enabled"]').closest('fieldset').id='music-review';
@@ -306,6 +378,11 @@
         q('#music-review').removeAttribute('id');
         const phone=q('[data-field="phone_enabled"]').closest('fieldset');
         phone.id='music-review'; q('#editor form').append(phone);
+      }
+      if (new URLSearchParams(location.search).get('review')==='ramp') {
+        q('#music-review').removeAttribute('id');
+        const volume=q('[data-field="music_ramp_enabled"]').closest('fieldset');
+        volume.id='music-review'; q('#editor form').append(volume);
       }
       const reviewStyle=document.createElement('style');
       reviewStyle.textContent='#editor form > :not(#music-review){display:none}#music-test{display:none}';
