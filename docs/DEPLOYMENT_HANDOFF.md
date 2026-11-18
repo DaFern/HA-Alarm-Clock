@@ -1,5 +1,48 @@
 # Morning handoff — 2026-11-18
 
+## Approved follow-up: temporarily keep MA DEV
+
+After the original handoff, the user disabled **Start on boot** for stable MA
+and approved retaining DEV while moving it to the compatible protocol-2 patch.
+The separately packaged app remains an eventual migration route, not a
+prerequisite for trying this candidate on the existing DEV connection.
+
+The updated MA patch was committed and successfully pushed to the fork:
+`7aab695417cea5d0fdf926620724cfd873ef1c22`, branch `ha-alarmclock-2.10.12`.
+DEV must use this exact `server_repo` value:
+
+```text
+DaFern/server@7aab695417cea5d0fdf926620724cfd873ef1c22
+```
+
+The published helper and seven relevant queue methods match the tested project
+templates by AST. All 225 Python tests passed again; targeted mypy and Ruff
+checks passed on the two changed MA files. This is not live-server verification.
+
+The exposed MCP tools can back up and restart DEV, but cannot edit its app
+options. After confirming the HA+DEV backup has completed, use DEV's supported
+**Configuration** tab to change only `server_repo`; preserve every other option.
+Saving may prompt for an app restart. Restarting DEV interrupts MA playback;
+obtain confirmation before doing so. Leave stable MA stopped and DEV installed.
+
+The pre-change HA+DEV partial backup completed successfully: slug `a4c89d7b`,
+created at `2026-11-18T01:18:59.686112+00:00`. Supervisor reported HA and one app
+included. It is not password-protected; retain it on trusted backup storage and
+do not publish or copy its contents into the project. The earlier protected full
+backup `60787622` also remains available.
+
+Then verify DEV startup, HA connection, the Kitchen speaker and protocol-2
+capabilities without playing audio. Do not deploy the integration candidate
+until this succeeds. Integration deployment still needs a runtime-file backup,
+configuration validation, explicit Core-restart approval and post-restart
+verification after at least 60 seconds. No saved alarm should be silently
+enabled or switched to music, and no audio test should start without consent.
+
+Tracking: https://github.com/DaFern/HA-Alarm-Clock/issues/2
+
+The original stop-point and local-package instructions below remain useful
+historical context; this temporary DEV route supersedes their installation order.
+
 ## Where we stopped
 
 HA-AlarmClock **0.7.0b1** was prepared as a source release candidate. It includes

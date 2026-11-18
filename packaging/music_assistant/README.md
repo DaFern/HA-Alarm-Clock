@@ -8,6 +8,16 @@ See the [morning deployment handoff](../../docs/DEPLOYMENT_HANDOFF.md) for the
 current stop point and step-by-step transfer/build/verification sequence. Do not
 uninstall DEV before the replacement is tested and its data backed up.
 
+### Temporary compatible DEV route
+
+The same protocol-2 source is now published in the MA fork at
+`DaFern/server@7aab695417cea5d0fdf926620724cfd873ef1c22`.
+The user approved retaining DEV temporarily, avoiding the local-package transfer
+until a convenient migration window. Back up HA+DEV before changing DEV's
+`server_repo`, verify that exact build and its protocol before deploying the HA
+candidate, and preserve all existing app options and data. The older
+`d66459f...` protocol-1 build is not compatible with scheduled music.
+
 ## Reproducible local build context
 
 From the project root, create a **new** directory on a development machine:
