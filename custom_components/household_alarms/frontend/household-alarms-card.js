@@ -19,9 +19,19 @@ class HouseholdAlarmsCard extends HTMLElement {
     this._openSections = new Set();
     this._tracks = [];
     this._trackQuery = "";
+    this._trackStatus = "";
+    this._trackError = false;
+    this._trackSearching = false;
+    this._choosingTrack = false;
     this.shadowRoot.addEventListener("click", (event) => this._click(event));
     this.shadowRoot.addEventListener("input", (event) => this._input(event));
     this.shadowRoot.addEventListener("change", (event) => this._change(event));
+    this.shadowRoot.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && event.target.hasAttribute("data-track-query")) {
+        event.preventDefault();
+        this.shadowRoot.querySelector('[data-action="search-tracks"]')?.click();
+      }
+    });
     this.shadowRoot.addEventListener("toggle", (event) => {
       const id = event.target.dataset.section;
       if (id) event.target.open ? this._openSections.add(id) : this._openSections.delete(id);
@@ -96,7 +106,7 @@ class HouseholdAlarmsCard extends HTMLElement {
 
   _entity(field, label, domain, optional = true) {
     return this._select(field, label, this._choices(domain).map((state) => [state.entity_id,
-      (state.attributes.friendly_name || state.entity_id) + (["unavailable", "unknown"].includes(state.state) ? " (unavailable)" : "")]), optional);
+      (state.attributes.friendly_name || state.entity_id) + (domain === "media_player" ? " — " + state.entity_id : "") + (["unavailable", "unknown"].includes(state.state) ? " (unavailable)" : "")]), optional);
   }
 
   _field(field, label, type = "text", extra = "") {
@@ -123,6 +133,7 @@ class HouseholdAlarmsCard extends HTMLElement {
   _render() {
     this._closePreview();
     this.shadowRoot.innerHTML = `<style>
+      .selected-track{border:2px solid var(--primary-color);border-radius:12px;padding:12px;margin:12px 0;background:var(--secondary-background-color);overflow-wrap:anywhere}.selected-track strong{display:block;margin-bottom:8px}#track-feedback{white-space:pre-wrap;overflow-wrap:anywhere}
       :host{display:block;color:var(--primary-text-color);font-family:var(--paper-font-body1_-_font-family,system-ui)}
       ha-card{display:block;padding:18px;border-radius:var(--ha-card-border-radius,16px);background:var(--ha-card-background,var(--card-background-color));border:1px solid var(--divider-color)}
       header,.row,.actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}header{justify-content:space-between}h2{font-size:21px;margin:0}h3{font-size:17px;margin:0 0 8px}
@@ -204,10 +215,7 @@ class HouseholdAlarmsCard extends HTMLElement {
       </div></fieldset>
       <fieldset><legend>Music</legend>${this._check("music_enabled", "Play a Music Assistant song instead of a tone")}
       ${d.music_enabled ? `<p>Requires the pinned HA-AlarmClock MA companion and an idle, empty, ungrouped queue. Add songs to that server's library first. Music repeats until you stop the alarm; Snooze restarts the same song without the message.</p>
-      <label>Search your speaker's MA song library<input data-track-query maxlength="100" value="${esc(this._trackQuery)}" placeholder="Song or artist"></label>
-      <button type="button" data-action="search-tracks" ${this._busy || !d.speaker ? "disabled" : ""}>Search songs</button>
-      <p role="status">Selected song: ${esc(d.music_track_name || d.music_track || "None")}</p>
-      <div class="actions">${this._tracks.map((track, index) => `<button type="button" data-action="choose-track" data-track-index="${index}">${esc(track.name)}</button>`).join("")}</div>
+      ${this._songPicker()}
       <div class="grid">${this._field("music_gain", "Background music gain (%)", "number", 'min="1" max="30" required')}${this._field("speech_delay", "Music before voice (seconds)", "number", 'min="0" max="120" required')}</div>
       <p>The delay starts with the music, after message preparation. Choose an assistant under More settings for speech. Short songs can end before a long delay or message finishes. Music alarms do not interrupt someone else's queue.</p>` : ""}</fieldset>
       <details data-section="more" ${section("more")}><summary>More settings</summary>
@@ -216,6 +224,10 @@ class HouseholdAlarmsCard extends HTMLElement {
         ${this._field("max_snoozes", "How many times?", "number", 'min="0" max="10" required')}
         ${d.mode !== "school" ? this._field("deadline", "Latest wake-up time (optional)", "time") : ""}
       </div>${d.mode !== "school" ? this._check("allow_sleep_in", "Allow sleeping in") : '<p>This saved alarm does not allow sleeping in.</p>'}
+      </fieldset><fieldset><legend>Alarm controls on your phone</legend>${this._check("phone_enabled", "Show Dismiss and Snooze when this alarm rings")}
+      ${d.phone_enabled ? `${this._select("phone_service", "Send alarm controls to", (this._data.phone_targets || []).map((item) => [item.service, item.service.replace(/^notify\.mobile_app_/, "").replace(/_/g, " ") + " — " + item.service]), false)}
+      ${this._check("phone_wake_screen", "Wake the phone screen (Android only)")}
+      <p>Lock-screen buttons control this alarm without unlocking the phone. Anyone holding the phone can use them. Snooze uses this alarm's limits and deadline. Controls update while snoozing and clear when the alarm ends. Your phone must allow Companion notifications and lock-screen content; screen wake requires an identified Android phone and enabled notification commands. Delivery needs a connection to Home Assistant.</p>` : '<p>Optional and off by default. This is separate from help-needed messages.</p>'}
       </fieldset><fieldset><legend>Let someone know</legend>${this._check("notify_enabled", "Send a message if help is needed")}
       <p>Let someone know when:</p><ul class="notification-help"><li>The alarm has not been stopped by the latest wake-up time.</li><li>You choose to sleep in.</li><li>The speaker cannot play the alarm.</li></ul>
       ${this._select("notify_service", "Send to", this._data.notify_services.map((id) => [id, id.replace(/^notify\.(mobile_app_)?/, "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())]), true, "Home Assistant only")}
@@ -242,6 +254,23 @@ class HouseholdAlarmsCard extends HTMLElement {
   _showMessage() {
     const element = this.shadowRoot.querySelector("#message");
     if (element) { element.className = this._message ? "notice" : ""; element.textContent = this._message; }
+  }
+
+  _songPicker() {
+    const d = this._draft;
+    const selected = !!d.music_track;
+    return `<div id="track-feedback" class="${this._trackStatus ? "notice" : ""} ${this._trackError ? "error" : ""}" role="status" aria-live="polite" aria-busy="${this._trackSearching}">${esc(this._trackStatus)}</div>
+      ${selected ? `<div class="selected-track"><strong>✓ Selected song</strong><span>${esc(d.music_track_name || d.music_track)}</span><p>Save the alarm to keep any changes.</p><button type="button" data-action="change-track" ${this._busy ? "disabled" : ""}>Change song</button></div>` : '<p>No song selected yet.</p>'}
+      ${!selected || this._choosingTrack ? `<label>Search your speaker's MA song library<input data-track-query maxlength="100" value="${esc(this._trackQuery)}" placeholder="Song or artist" aria-describedby="track-feedback"></label>
+      <button type="button" data-action="search-tracks" ${this._busy || !d.speaker ? "disabled" : ""}>${this._trackSearching ? "Searching…" : "Search songs"}</button>
+      <div class="actions">${this._tracks.map((track, index) => `<button type="button" data-action="choose-track" data-track-index="${index}" aria-pressed="${d.music_track === track.uri}">${esc(track.name)}</button>`).join("")}</div>` : ""}`;
+  }
+
+  _updateTrackStatus() {
+    const status = this.shadowRoot.querySelector("#track-feedback");
+    if (status) { status.textContent = this._trackStatus; status.className = `notice ${this._trackError ? "error" : ""}`; status.setAttribute("aria-busy", String(this._trackSearching)); }
+    const button = this.shadowRoot.querySelector('[data-action="search-tracks"]');
+    if (button) button.textContent = this._trackSearching ? "Searching…" : "Search songs";
   }
 
   _renderMusic(force = false) {
@@ -292,8 +321,9 @@ class HouseholdAlarmsCard extends HTMLElement {
     const field = input.dataset.field;
     if (!field) return;
     this._draft[field] = input.type === "checkbox" ? input.checked : input.type === "number" || field === "briefing_words" ? Number(input.value) : input.value;
-    if (field === "speaker") { this._draft.music_track = ""; this._draft.music_track_name = ""; this._draft.music_server = ""; this._tracks = []; }
+    if (field === "speaker") { this._draft.music_track = ""; this._draft.music_track_name = ""; this._draft.music_server = ""; this._tracks = []; this._trackStatus = ""; this._trackError = false; this._choosingTrack = false; }
     if (field === "music_enabled" || field === "speaker") this._renderEditor();
+    if (field === "phone_enabled" || field === "phone_service") this._renderEditor();
     if (field === "mode") {
       if (input.value === "school") {
         this._draft.allow_sleep_in = false;
@@ -315,6 +345,7 @@ class HouseholdAlarmsCard extends HTMLElement {
     this._editRevision = this._data.revision;
     this._draft = alarm ? this._configuration(alarm) : clone(this._data.defaults);
     this._tracks = []; this._trackQuery = "";
+    this._trackStatus = ""; this._trackError = false; this._trackSearching = false; this._choosingTrack = false;
     this._openSections = new Set();
     this._renderEditor();
     this.shadowRoot.querySelector("#editor")?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -371,16 +402,22 @@ class HouseholdAlarmsCard extends HTMLElement {
     const action = button.dataset.action;
     if (action === "search-tracks") {
       await this._operation(async () => {
-        const result = await this._hass.callWS({ type: "household_alarms/tracks", speaker: this._draft.speaker, query: this._trackQuery });
-        this._tracks = result.tracks;
-        this._trackServer = result.server_id;
-        this._message = this._tracks.length ? "Choose a song below. Save the alarm to keep it." : "No songs found. Add the song to this MA library, then search again.";
+        this._tracks = []; this._trackSearching = true; this._trackError = false;
+        this._trackStatus = "Searching the selected speaker's Music Assistant library…"; this._updateTrackStatus();
+        try {
+          const result = await this._hass.callWS({ type: "household_alarms/tracks", speaker: this._draft.speaker, query: this._trackQuery });
+          this._tracks = result.tracks; this._trackServer = result.server_id;
+          this._trackStatus = this._tracks.length ? "Choose a song below. Save the alarm to keep it." : "No songs found. Add the song to this MA library, then search again.";
+        } catch (error) {
+          this._trackStatus = error.message || "Song search failed. Check the selected MA speaker."; this._trackError = true;
+        } finally { this._trackSearching = false; }
       });
       return;
     }
+    if (action === "change-track") { this._choosingTrack = true; this._tracks = []; this._trackStatus = "Choose a replacement song. Your current selection stays until you pick another."; this._trackError = false; this._renderEditor(); this.shadowRoot.querySelector("[data-track-query]")?.focus(); return; }
     if (action === "choose-track") {
       const track = this._tracks[Number(button.dataset.trackIndex)];
-      if (track && this._draft) { this._draft.music_track = track.uri; this._draft.music_track_name = track.name; this._draft.music_server = this._trackServer; this._renderEditor(); }
+      if (track && this._draft) { this._draft.music_track = track.uri; this._draft.music_track_name = track.name; this._draft.music_server = this._trackServer; this._tracks = []; this._choosingTrack = false; this._trackStatus = "Song selected. Save the alarm to keep it."; this._trackError = false; this._renderEditor(); this.shadowRoot.querySelector('[data-action="change-track"]')?.focus(); }
       return;
     }
     if (action.startsWith("music-")) { await this._musicOperation(action.slice(6)); return; }

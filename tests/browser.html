@@ -13,6 +13,7 @@
   const calls = [], confirms = [];
   const mediaCalls = [], revokedUrls = [];
   let playbackError = null, previewError = null, previewGate = null;
+  let trackError = null, trackGate = null;
   HTMLMediaElement.prototype.play = function () { mediaCalls.push(['play',this.src]); return playbackError ? Promise.reject(playbackError) : Promise.resolve(); };
   HTMLMediaElement.prototype.pause = function () { mediaCalls.push(['pause',this.src]); };
   HTMLMediaElement.prototype.load = function () {};
@@ -33,7 +34,9 @@
   defaults.briefing_words=100; defaults.schedule_include=''; defaults.schedule_exclude='';
   defaults.clear_sleep_on_dismiss=false;
   Object.assign(defaults,{music_enabled:false,music_track:'',music_track_name:'',music_server:'',music_gain:25,speech_delay:0});
+  Object.assign(defaults,{phone_enabled:false,phone_service:'',phone_wake_screen:true});
   const data = {revision:0, alarms:[], defaults, assistants:[{id:'pipeline-jarvis',name:'JARVIS morning voice'}], warnings:[], notify_services:["notify.adults"], test_results:{}};
+  data.phone_targets=[{service:'notify.mobile_app_android_phone',android:true},{service:'notify.mobile_app_iphone',android:false}];
   const push = () => subscriber?.(deep(data));
   const states = Object.fromEntries([
     ["media_player.bedroom_speaker","Bedroom Speaker"], ["media_player.lottie_s_speaker","Lottie's Speaker"],
@@ -56,7 +59,11 @@
       if (previewError) throw previewError;
       return deep(previewResult);
     }
-    if (message.type === "household_alarms/tracks") return {server_id:'ma-server',tracks:[{uri:'library://track/42',name:'Test <img src=x onerror="window.attacked=true"> song'}]};
+    if (message.type === "household_alarms/tracks") {
+      if (trackGate) await trackGate;
+      if (trackError) throw new Error(trackError);
+      return {server_id:'ma-server',tracks:[{uri:'library://track/42',name:'Test <img src=x onerror="window.attacked=true"> song'}]};
+    }
     if (message.type === "household_alarms/test") {
       if (data.alarms.find((a) => a.id===message.alarm_id)?.music_enabled) {
         data.music_test={id:'music-session-1',status:'preparing',track:'Test <img src=x onerror="window.attacked=true"> song',message:'Preparing the test…'};
@@ -97,6 +104,8 @@
     test("generic form has no preset family or assistant", !q('#people option') && !card._draft.assistant_id && !card._draft.weather);
     test("advanced options start collapsed", !q('[data-section="more"]').open);
     test("speaker selection is explicit", card._draft.speaker === "");
+    test('speaker options include unambiguous entity IDs', [...q('[data-field="speaker"]').options].some((o) => o.textContent.includes('media_player.lottie_s_speaker')));
+    test('phone controls default off and stay separate from help alerts', !card._draft.phone_enabled && !q('[data-field="phone_service"]'));
     await set("speaker","media_player.lottie_s_speaker");
     await set("person","Charlotte");
     test("repeat choices omit school and weekend presets", ![...q('[data-field="mode"]').options].some((option) => /school|weekend|holiday/i.test(option.textContent)));
@@ -231,6 +240,24 @@
     await click('search-tracks');
     test('search targets selected speaker and does not play', calls.findLast((c) => c.type==='household_alarms/tracks').speaker===card._draft.speaker && !calls.some((c) => c.type==='household_alarms/music_start'));
     test('search metadata escaped', !q('#editor img') && !window.attacked);
+    test('search feedback is above the search box', !!(q('#track-feedback').compareDocumentPosition(q('[data-track-query]')) & Node.DOCUMENT_POSITION_FOLLOWING));
+    const savedBeforeEnter=calls.filter((c) => c.type==='household_alarms/save').length;
+    q('[data-track-query]').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true})); await flush();
+    test('Enter in song search searches instead of saving the alarm', calls.findLast((c) => c.type==='household_alarms/tracks').query==='Test' && calls.filter((c) => c.type==='household_alarms/save').length===savedBeforeEnter);
+    let releaseTrack;
+    trackGate=new Promise((resolve) => {releaseTrack=resolve;});
+    const pendingTrack=card._click({target:q('[data-action="search-tracks"]')}); await flush();
+    test('search immediately shows loading feedback beside its controls', q('#track-feedback').textContent.includes('Searching') && q('#track-feedback').getAttribute('aria-busy')==='true' && q('[data-action="search-tracks"]').textContent==='Searching…');
+    releaseTrack(); await pendingTrack; trackGate=null;
+    trackError='Choose the Music Assistant speaker entity'; await click('search-tracks');
+    test('search errors are visible inline rather than only at card top', q('#track-feedback').classList.contains('error') && q('#track-feedback').textContent===trackError && !q('[data-action="choose-track"]'));
+    trackError=null; await click('search-tracks');
+    await click('choose-track');
+    test('selecting a song shows a highlighted confirmation and collapses results', q('.selected-track').textContent.includes('Selected song') && q('#track-feedback').textContent.includes('Song selected') && !q('[data-action="choose-track"]') && !q('[data-track-query]'));
+    await click('change-track');
+    test('Change song opens search without discarding current selection', !!q('[data-track-query]') && card._draft.music_track==='library://track/42');
+    await click('search-tracks');
+    test('current song is marked in replacement search results', q('[data-action="choose-track"]').getAttribute('aria-pressed')==='true');
     await click('choose-track');
     await set('music_gain',20); await set('speech_delay',12);
     test('chosen song and delay live in alarm draft', card._draft.music_track==='library://track/42' && card._draft.speech_delay===12);
@@ -238,8 +265,14 @@
     test('changing MA server speaker clears local song identity', !card._draft.music_track);
     await set('speaker','media_player.lottie_s_speaker');
     await click('search-tracks'); await click('choose-track');
+    await set('phone_enabled',true);
+    test('phone controls have a separate Companion-only recipient selector', !!q('[data-field="phone_service"]') && ![...q('[data-field="phone_service"]').options].some((o) => o.value==='notify.adults'));
+    await set('phone_service','notify.mobile_app_android_phone');
+    await set('phone_wake_screen',false);
+    test('screen wake can be independently disabled', !card._draft.phone_wake_screen && q('#editor').textContent.includes('Anyone holding the phone'));
     await card._save(); await flush();
     test('song gain and delay persisted together', data.alarms[0].music_track==='library://track/42' && data.alarms[0].music_gain===20 && data.alarms[0].speech_delay===12);
+    test('phone preference recipient and wake option persist per alarm', data.alarms[0].phone_enabled && data.alarms[0].phone_service==='notify.mobile_app_android_phone' && !data.alarms[0].phone_wake_screen);
     const alarmsBeforeMusic=JSON.stringify(data.alarms), revisionBeforeMusic=data.revision;
     const priorTests=calls.filter((c) => c.type==='household_alarms/test').length;
     confirmation=false; await click('test');
@@ -269,6 +302,11 @@
       card._draft=null; card._edit(data.alarms[0]);
       card._draft.music_track_name='Example song — Example artist'; card._renderEditor();
       q('[data-field="music_enabled"]').closest('fieldset').id='music-review';
+      if (new URLSearchParams(location.search).get('review')==='phone') {
+        q('#music-review').removeAttribute('id');
+        const phone=q('[data-field="phone_enabled"]').closest('fieldset');
+        phone.id='music-review'; q('#editor form').append(phone);
+      }
       const reviewStyle=document.createElement('style');
       reviewStyle.textContent='#editor form > :not(#music-review){display:none}#music-test{display:none}';
       card.shadowRoot.append(reviewStyle);

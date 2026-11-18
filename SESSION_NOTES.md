@@ -16,3 +16,18 @@
 - Backed up runtime files at `/data/v2/cache/opencode/household_alarms-before-0.7.0b1-20261118T012905Z`, deployed 0.7.0b1, verified 19 source hashes and passed configuration validation.
 - Performed the approved Core restart without retrying its 502, waited 65 seconds and verified the integration loaded, zero enabled/active alarms, idle Kitchen speaker, and live card rendering at phone/desktop widths.
 - Left saved settings and speakers unchanged and played no audio. Left card-driven protocol-2 song search, audible/scheduled acceptance, packaged-app migration and stable release pending; retained DEV and the known restart limitation.
+
+## 2026-11-18 — project-only UI and phone controls
+- The user confirmed song search worked with the correct MA entity and approved clearer selection/inline feedback plus optional lock-screen controls.
+- Prepared 0.7.0b2 with highlighted song selection/Change song, inline search loading/errors, speaker entity IDs, and opt-in phone Dismiss/Snooze with guarded state-scoped actions and an Android screen-wake option.
+- Passed 250 Python tests (including five real MA-helper/FFmpeg tests) and 92 Chromium checks at each width; visually reviewed the offline music/phone panels. Updated behavior, privacy, permissions and acceptance documentation.
+- Left this follow-up uncommitted, unpushed and undeployed. Live remained 0.7.0b1; no feature-test phone commands, audio, MA changes or restart occurred. Physical lock-screen behavior and deployment required separate approval.
+
+## 2026-11-18 — approved 0.7.0b2 deployment
+- Backed up 0.7.0b1 runtime files at `/data/v2/cache/opencode/household_alarms-before-0.7.0b2-20261118T021342Z`, deployed eight changed files and verified all 20 candidate files matched. No YAML changed; configuration validation passed.
+- Performed the approved Core restart without retrying its 502 disconnect, waited 65 seconds, and verified the integration loaded, zero enabled/active alarms, idle DEV Kitchen speaker, and live dashboard rendering at both widths.
+- Left saved settings and MA unchanged, left phone controls off by default, and sent no audio or notification-feature test. Retained physical lock-screen acceptance as pending. The b2 source remained uncommitted/unpushed; no stable release was published.
+
+## 2026-11-18 — 0.7.0b2 publication review
+- Reviewed the deployed phone-control and song-picker follow-up for the requested commit/push and refreshed its publication handoff. Excluded the unrelated `archive/services.yaml.bak` and runtime/cache artifacts.
+- Kept physical lock-screen/audio acceptance and the known Echo restart issue pending. No live changes, restart or stable release accompanied this publication task.

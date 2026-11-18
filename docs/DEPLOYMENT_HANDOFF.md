@@ -1,5 +1,27 @@
 # Morning handoff — 2026-11-18
 
+## Deployed follow-up: song-picker feedback and phone controls
+
+The user confirmed search worked after selecting the correct MA speaker, but
+reported off-screen error feedback and unclear song-selection state. The
+approved follow-up adds inline loading/errors, a highlighted selected-song
+summary with Change song, unambiguous speaker entity IDs, and optional per-alarm
+lock-screen Dismiss/Snooze controls with an Android screen-wake option.
+
+The user approved deployment. Live is now **0.7.0b2** on the same protocol-2 DEV
+fork. Eight runtime files changed; all 20 files matched the candidate. No YAML
+changed. Previous runtime files and a deployment hash receipt were saved at
+`/data/v2/cache/opencode/household_alarms-before-0.7.0b2-20261118T021342Z`.
+Configuration validation passed without errors/warnings. Core was restarted once
+(its disconnect returned 502, not retried); after a 65-second wait the integration
+was loaded, zero alarms were enabled/active, Kitchen was idle, and the dashboard
+rendered at 390 and 1280 pixels. No saved settings, phone commands, audio or MA
+updates were performed. Phone controls stay off by default. Physical-phone
+acceptance remains pending; see the integration README for permissions and
+lock-screen privacy/connectivity limits. Source publication is tracked separately
+in the Git history and issue #2; deployment/publication is not a stable release
+or completion of physical-phone acceptance.
+
 ## Current status: 0.7.0b1 deployed; live acceptance pending
 
 This supersedes the older stop-point statements below. The user updated and

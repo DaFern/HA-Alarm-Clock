@@ -6,7 +6,16 @@ The integration source is in `custom_components/household_alarms/`. See its
 [README](custom_components/household_alarms/README.md) for setup, behavior, and
 acceptance-testing notes.
 
-## Current candidate: 0.7.0b1
+## Current candidate: 0.7.0b2
+
+### Deployed follow-up: 0.7.0b2
+
+The working tree now contains clearer song selection/search feedback and optional
+Companion phone controls. These changes were **deployed and verified loaded**
+on 2026-11-18. Phone controls remain off by default and separate from help-needed
+messages. See the [integration README](custom_components/household_alarms/README.md)
+for behavior, permissions and acceptance requirements. No MA patch update is
+needed for this follow-up; it still uses protocol 2.
 
 The project contains opt-in scheduled Music Assistant songs, per-alarm library
 search/selection, separate background gain, and a 0–120-second voice delay.

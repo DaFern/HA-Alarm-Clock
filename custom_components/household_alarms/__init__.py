@@ -55,6 +55,7 @@ async def async_setup_entry(hass, entry):
     await manager.async_load()
     hass.data[DOMAIN] = manager
     entry.runtime_data = manager
+    entry.async_on_unload(hass.bus.async_listen("mobile_app_notification_action", manager.phone_notifications.async_event))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     async def action(call):

@@ -23,6 +23,7 @@ DEFAULTS = {
     "repeat_seconds": 60, "snooze_enabled": True, "snooze_minutes": 5,
     "max_snoozes": 3, "deadline": "", "allow_sleep_in": False,
     "notify_enabled": True, "notify_service": "",
+    "phone_enabled": False, "phone_service": "", "phone_wake_screen": True,
     "bedtime_entity": "", "clear_sleep_on_dismiss": False, "briefing_enabled": False,
     "assistant_id": "", "instructions": "Give a short, friendly good morning message. Include the supplied time and weather. Do not make up information.",
     "weather": "",
@@ -76,7 +77,7 @@ def validate(data: dict, alarm_id: str | None = None, *, require_speaker: bool =
         result[key] = "\n".join(phrases)
     if not result["name"]:
         raise AlarmError("Give the alarm a name")
-    for key in ("enabled", "snooze_enabled", "allow_sleep_in", "notify_enabled", "briefing_enabled", "schedule_enabled", "clear_sleep_on_dismiss", "music_enabled"):
+    for key in ("enabled", "snooze_enabled", "allow_sleep_in", "notify_enabled", "briefing_enabled", "schedule_enabled", "clear_sleep_on_dismiss", "music_enabled", "phone_enabled", "phone_wake_screen"):
         if type(result[key]) is not bool:
             raise AlarmError(f"Invalid {key}")
     limits = {
@@ -100,6 +101,10 @@ def validate(data: dict, alarm_id: str | None = None, *, require_speaker: bool =
         raise AlarmError("Invalid Music Assistant connection")
     if result["music_enabled"] and not result["music_server"]:
         raise AlarmError("Search and reselect this song to bind its Music Assistant connection")
+    if not isinstance(result["phone_service"], str) or (result["phone_service"] and not re.fullmatch(r"notify\.mobile_app_[a-z0-9_]+", result["phone_service"])):
+        raise AlarmError("Choose a Companion app phone, not a notification group")
+    if result["phone_enabled"] and not result["phone_service"]:
+        raise AlarmError("Choose a phone for alarm controls")
     if not isinstance(result["mode"], str) or not isinstance(result["tone"], str) or result["mode"] not in MODES or result["tone"] not in TONES:
         raise AlarmError("Invalid schedule or sound")
     if not isinstance(result["calendar_rule"], str) or result["calendar_rule"] not in CALENDAR_RULES:

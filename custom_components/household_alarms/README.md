@@ -1,4 +1,71 @@
-# HA-AlarmClock 0.7.0b1 — project release candidate
+# HA-AlarmClock 0.7.0b2 — deployed candidate
+
+## Song picker and optional lock-screen controls (phone acceptance pending)
+
+This follow-up was deployed and verified loaded on 2026-11-18 after the approved
+Core restart and a 65-second wait. All 20 runtime files matched the candidate;
+configuration validation passed and the dashboard rendered at phone/desktop
+widths. Saved settings remained unchanged, with zero enabled/active alarms.
+No audio or notification-feature phone/screen-wake test was sent. Lock-screen
+acceptance remains pending; the older 0.7.0b1 notes below record prior stages.
+
+Search now shows loading, failures and empty results directly **above its search
+box**, not only at the top of the card. Choosing a song shows a highlighted
+selected-song summary and collapses the results. **Change song** reopens search
+without discarding the existing selection until another song is chosen. Speaker
+choices include entity IDs to distinguish native Alexa and MA entities sharing
+the same friendly name. Enter in search searches rather than saving the form.
+
+### Alarm controls on your phone
+
+The optional per-alarm setting is **off by default**, independent of **Let someone
+know**. Choose one `notify.mobile_app_*` Companion app recipient, not a notification
+group. Normal saved-alarm sound/music tests do not create real-run phone controls.
+
+When a scheduled alarm rings, the integration submits a high-priority,
+lock-screen-visible notification with **Dismiss** and, when permitted, **Snooze**.
+Snooze uses the saved minutes, maximum count and get-up deadline; it is absent
+while already snoozing or at escalation/deadline. Snoozing updates the same tagged
+notification; ending, sleeping in, missing or dismissing the alarm requests its
+removal. Retried tone delivery does not repeatedly push or wake the screen.
+
+The separately optional **Wake the phone screen** requests Android's documented
+`command_screen_on`. It does not unlock the phone or change brightness, timeout,
+DND, volume or security settings. The target must be identifiable as Android from
+registered Companion metadata; an iOS/unknown target still gets controls but is
+never sent an Android command. Renamed/ambiguous registrations may require a
+manual check if automatic platform identification is unavailable.
+
+**Permissions and limits:** allow Companion notifications and lock-screen
+content for the dedicated **HA-AlarmClock controls** notification channel.
+Android's channel importance/content settings override application requests;
+enable Companion notification commands for screen wake. Screen wake and visibility
+must be checked on the actual locked phone and cannot be guaranteed from a push
+service response. Delivery and button actions need connectivity to Home Assistant;
+high-priority/TTL-zero delivery is not a guaranteed offline alarm. Notification
+sound/DND behavior remains controlled by the phone/channel settings.
+
+Buttons intentionally do not require unlocking: **anyone holding the selected
+phone can dismiss or snooze that alarm**. The notification exposes only the alarm
+name/status, not the assistant briefing or calendar contents. Run/phase-scoped
+random action capabilities are persisted before posting, rotated on state
+transitions/republication, hidden from card snapshots, and checked atomically
+with the normal alarm action. Stale, duplicate, wrong-occurrence and disallowed
+snooze actions cannot affect a later run. These safeguards are not a substitute
+for protecting the phone and HA event/API access.
+
+Push/clear failure produces a bounded, sanitized warning and background retry;
+it does not block speaker delivery or silently dismiss an alarm. Screen-wake
+failure leaves submitted controls available without assuming the phone woke.
+Clearing is best-effort; an old displayed notification may remain on an offline
+phone, but stale actions are rejected after the run changes. A Core reload can
+republish an active occurrence with fresh controls; it cannot receive actions
+while offline.
+
+Deployment/restart were approved and completed; physical-phone acceptance must
+include two phones/occurrences where possible, locked-screen wake/visibility,
+Dismiss, Snooze limits/deadline, stale buttons, offline delivery, cleanup and
+restart behavior. Automated tests use fakes, not a real phone or push gateway.
 
 ## Scheduled selected-song alarms (deployed candidate; acceptance pending)
 

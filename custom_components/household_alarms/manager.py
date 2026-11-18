@@ -7,6 +7,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import json
 import logging
+import secrets
 import uuid
 
 from homeassistant.core import Context
@@ -18,6 +19,7 @@ from .const import DOMAIN, EVENT_CHANGED, MAX_ALARMS, STORAGE_VERSION
 from .assistants import assistants, preview_audio, resolve_assistant, speech_options
 from .ma_audio import MusicTests
 from .music import AlarmMusic
+from .notifications import AlarmNotifications, phone_targets
 from .model import (
     AlarmError, DEFAULTS, deadline_at, elapsed_after, finite_number, is_school_day, include_event_title, speech_wait_seconds,
     local_occurrence, matches, snooze_until, validate, volume,
@@ -52,6 +54,7 @@ class AlarmManager:
         self.sensor_entity_id = None
         self.context = Context()
         self.music_tests = MusicTests(self)
+        self.phone_notifications = AlarmNotifications(self)
 
     async def async_load(self):
         data = await self.store.async_load()
@@ -93,6 +96,7 @@ class AlarmManager:
         await self.store.async_save(deepcopy(self._data()))
 
     def changed(self):
+        self.phone_notifications.schedule()
         self.hass.bus.async_fire(EVENT_CHANGED)
         for listener in tuple(self.listeners):
             try:
@@ -128,7 +132,8 @@ class AlarmManager:
             except AlarmError as err:
                 if alarm["assistant_id"] or alarm["briefing_enabled"] or alarm["tone"] == "none":
                     warning = str(err)
-            result.append({**deepcopy(alarm), "run": deepcopy(run), "next": self._next(alarm, now),
+            public_run = {key: deepcopy(value) for key, value in run.items() if not key.startswith("phone_")} if run else None
+            result.append({**deepcopy(alarm), "run": public_run, "next": self._next(alarm, now),
                            "assistant_warning": warning})
         return {
             "revision": self.revision, "alarms": result, "defaults": deepcopy(DEFAULTS),
@@ -137,6 +142,7 @@ class AlarmManager:
             "music_test": self.music_tests.snapshot(),
             "assistants": [{"id": item.id, "name": item.name} for item in assistants(self.hass)],
             "notify_services": sorted("notify." + name for name in self.hass.services.async_services().get("notify", {})),
+            "phone_targets": phone_targets(self.hass),
         }
 
     def _next(self, alarm, now):
@@ -206,12 +212,19 @@ class AlarmManager:
                 raise
         self.changed()
 
-    async def async_action(self, alarm_id, action):
+    async def async_action(self, alarm_id, action, *, phone_token=None):
         async with self.lock:
             alarm = self.alarms.get(alarm_id)
             run = self.runs.get(alarm_id)
             if not alarm or not run or run["status"] not in ACTIVE:
                 raise AlarmError("This alarm is not active")
+            if phone_token is not None:
+                if (not alarm["phone_enabled"] or not isinstance(phone_token, str)
+                        or not isinstance(run.get("phone_token"), str) or not run["phone_token"]
+                        or not secrets.compare_digest(phone_token, run["phone_token"])):
+                    raise AlarmError("This phone control is no longer current")
+                if action == "snooze" and (run["status"] != "ringing" or run.get("escalated")):
+                    raise AlarmError("This alarm cannot be snoozed now")
             previous = deepcopy(run)
             if action == "snooze":
                 wake = snooze_until(alarm, run, dt_util.now())
@@ -224,6 +237,8 @@ class AlarmManager:
                 run["status"] = "dismissed"
             else:
                 raise AlarmError("Unknown alarm action")
+            if run.get("phone_token"):
+                run["phone_token"] = uuid.uuid4().hex
             try:
                 await self._save()
             except Exception:
@@ -425,6 +440,10 @@ class AlarmManager:
                     deliver.append(alarm_id)
                 changed = True
             if changed:
+                for alarm_id, run in self.runs.items():
+                    previous = before_runs.get(alarm_id, {})
+                    if run.get("phone_token") and any(run.get(key) != previous.get(key) for key in ("started", "status", "snoozes", "escalated")):
+                        run["phone_token"] = uuid.uuid4().hex
                 try:
                     await self._save()
                 except Exception:
@@ -436,6 +455,7 @@ class AlarmManager:
                 self._spawn(self.alert_tasks, alarm_id, self._deadline_alert(alarm_id))
         if changed or self.warnings != before_warnings:
             self.changed()
+        self.phone_notifications.schedule()
 
     def _spawn(self, collection, key, coroutine):
         task = self.hass.async_create_background_task(coroutine, f"{DOMAIN}_{key}")
@@ -814,6 +834,7 @@ class AlarmManager:
 
     async def async_shutdown(self):
         self.closed = True
+        await self.phone_notifications.async_shutdown()
         await self.music_tests.async_shutdown()
         tasks = [*self.tasks.values(), *self.alert_tasks.values(), *self.preview_tasks]
         for task in tasks:
