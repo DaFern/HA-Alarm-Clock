@@ -6,6 +6,12 @@ The integration source is in `custom_components/household_alarms/`. See its
 [README](custom_components/household_alarms/README.md) for setup, behavior, and
 acceptance-testing notes.
 
+## Music Assistant compatibility
+
+Standard tone and spoken alarms use Home Assistant and can run without Music Assistant. If you use Music Assistant to expose a speaker to Home Assistant, that speaker still needs to be available as a compatible media player.
+
+The current scheduled-song mode, including music-only alarms and voice over music, requires the project's patched Music Assistant server with protocol 2. Keep the Music option off on stock Music Assistant while upstream support is pending. The patched server is optional for users who want to test scheduled music now.
+
 ## Current candidate: 0.7.0b2
 
 ### Project-only follow-up: timed music-volume ramp (issue #3)
