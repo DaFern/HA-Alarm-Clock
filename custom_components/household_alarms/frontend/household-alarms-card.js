@@ -171,9 +171,85 @@ class HouseholdAlarmsCard extends HTMLElement {
       return;
     }
     if (this._draft.assistant_id) this._editorModeMemory.assistantId = this._draft.assistant_id;
-    if (mode === "off") this._draft.assistant_id = "";
-    else if (!this._draft.assistant_id) this._draft.assistant_id = this._editorModeMemory.assistantId || "";
+    this._editorModeMemory.messageMode = mode;
+    if (!this._draft.assistant_id && this._editorModeMemory.assistantId) this._draft.assistant_id = this._editorModeMemory.assistantId;
     this._draft.briefing_enabled = mode === "assistant";
+  }
+
+  _captureEditorFocus(editor) {
+    const active = this.shadowRoot.activeElement;
+    if (!active || !editor.contains(active)) return null;
+    const descriptor = { selectionStart: active.selectionStart, selectionEnd: active.selectionEnd };
+    if (active.dataset.field) return { ...descriptor, field: active.dataset.field };
+    if (active.dataset.modeGroup) return { ...descriptor, group: active.dataset.modeGroup, mode: active.dataset.mode };
+    if (active.dataset.action === "editor-mode") return { ...descriptor, group: active.dataset.modeGroup, mode: active.dataset.mode };
+    if (active.dataset.section) return { ...descriptor, section: active.dataset.section };
+    if (active.closest?.("summary")) {
+      const section = active.closest("details[data-section]")?.dataset.section;
+      if (section) return { ...descriptor, section };
+    }
+    if (active.dataset.action) return { ...descriptor, action: active.dataset.action };
+    return null;
+  }
+
+  _restoreEditorFocus(focus, editor) {
+    const field = this._focusAfterEditorRender;
+    this._focusAfterEditorRender = null;
+    const target = field
+      ? editor.querySelector(`[data-field="${field}"]`)
+      : focus?.field ? editor.querySelector(`[data-field="${focus.field}"]`)
+      : focus?.group ? editor.querySelector(`[data-mode-group="${focus.group}"][data-mode="${focus.mode}"]`)
+      : focus?.section ? editor.querySelector(`[data-section="${focus.section}"] summary`)
+      : focus?.action ? editor.querySelector(`[data-action="${focus.action}"]`)
+      : null;
+    if (!target) return;
+    target.focus({ preventScroll: true });
+    if (!field && focus?.field && Number.isInteger(focus.selectionStart) && target.setSelectionRange) {
+      try { target.setSelectionRange(focus.selectionStart, focus.selectionEnd); } catch (_) { /* not a text control */ }
+    }
+  }
+
+  _updateRampSummary() {
+    const summary = this.shadowRoot.querySelector("[data-ramp-summary]");
+    if (!summary || !this._draft) return;
+    const d = this._draft;
+    summary.textContent = `Starts at ${d.start_volume}%, rises by ${d.music_ramp_step} percentage points every ${d.music_ramp_seconds} seconds, up to ${d.max_volume}%. It does not restart music or repeat the voice. Snooze starts again at the starting volume; changing volume yourself pauses increases for that ring. Requires the updated MA companion.`;
+  }
+
+  _updateSectionSummaries() {
+    if (!this._draft) return;
+    const d = this._draft;
+    const snooze = d.snooze_enabled
+      ? `${d.snooze_minutes} minutes · ${d.max_snoozes} snoozes`
+      : "Snooze off";
+    const wake = d.deadline ? ` · Get up by ${d.deadline}` : "";
+    const phone = d.phone_enabled
+      ? `Phone controls on · ${d.phone_service ? this._serviceName(d.phone_service) : "Choose a phone"}${d.phone_wake_screen ? " · Screen wake on" : ""}`
+      : "Phone controls off";
+    const alerts = d.notify_enabled
+      ? `Help alerts on · ${this._serviceName(d.notify_service || "Home Assistant")}`
+      : "Help alerts off";
+    const sleepName = d.bedtime_entity
+      ? (this._hass?.states?.[d.bedtime_entity]?.attributes?.friendly_name || d.bedtime_entity)
+      : "No sleep switch selected";
+    const sleep = d.bedtime_entity && d.clear_sleep_on_dismiss
+      ? `${sleepName} · Turn off on dismissal`
+      : sleepName;
+    const summaries = {
+      "wake-limits": `${snooze}${wake}`,
+      "phone-controls": phone,
+      "help-alerts": alerts,
+      "sleep-switch": sleep,
+    };
+    for (const [section, text] of Object.entries(summaries)) {
+      const element = this.shadowRoot.querySelector(`[data-summary="${section}"]`);
+      if (element) element.textContent = text;
+    }
+  }
+
+  _serviceName(service) {
+    if (!service || service === "Home Assistant") return "Home Assistant only";
+    return service.replace(/^notify\.(mobile_app_)?/, "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
   }
 
   _syncPower() {
@@ -181,8 +257,6 @@ class HouseholdAlarmsCard extends HTMLElement {
     const alarm = this._data?.alarms.find((item) => item.id === this._editingId);
     if (!alarm) return;
     this._draft.enabled = alarm.enabled;
-    const power = this.shadowRoot.querySelector("#editor .power");
-      if (power) power.outerHTML = this._power(alarm.enabled, alarm.id, this._busy || ACTIVE.has(alarm.run?.status), `Turn ${alarm.name} ${alarm.enabled ? "off" : "on"}`);
   }
 
   _render() {
@@ -199,7 +273,7 @@ class HouseholdAlarmsCard extends HTMLElement {
       dialog{box-sizing:border-box;width:min(560px,calc(100vw - 24px));max-height:85vh;overflow:auto;border:1px solid var(--divider-color);border-radius:16px;padding:20px;background:var(--card-background-color,#191919);color:var(--primary-text-color)}dialog::backdrop{background:#0009}dialog audio{width:100%;margin:12px 0}dialog .preview-text{white-space:pre-wrap;overflow-wrap:anywhere}
       @media(max-width:520px){.grid{grid-template-columns:1fr}.full{grid-column:auto}ha-card{padding:14px}.alarm-heading{gap:8px}.time{font-size:25px}.name{font-size:16px}.active-actions button{flex:1}}
       ha-card{container-type:inline-size}
-      @container (max-width:520px){.alarm-row{grid-template-columns:minmax(0,1fr) auto;gap:8px}.alarm-tools{grid-template-columns:repeat(2,44px);grid-template-rows:repeat(2,44px)}}
+      @container (max-width:520px){.grid{grid-template-columns:1fr}.full{grid-column:auto}.alarm-row{grid-template-columns:minmax(0,1fr) auto;gap:8px}.alarm-tools{grid-template-columns:repeat(2,44px);grid-template-rows:repeat(2,44px)}}
     </style><ha-card><header><h2>Alarms</h2><button class="primary" data-action="new" ${!this._data ? "disabled" : ""}>＋ Add alarm</button></header>
       <div id="message" role="status" aria-live="polite"></div>
       ${this._loadError ? `<div class="notice error">${esc(this._loadError)}</div><button data-action="retry">Retry connection</button>` : ""}
@@ -245,6 +319,7 @@ class HouseholdAlarmsCard extends HTMLElement {
   _renderEditor() {
     const editor = this.shadowRoot.querySelector("#editor");
     if (!editor) return;
+    const focus = this._captureEditorFocus(editor);
     this._renderList();
     if (!this._draft) { editor.innerHTML = ""; return; }
     const d = this._draft;
@@ -252,14 +327,29 @@ class HouseholdAlarmsCard extends HTMLElement {
     const people = [...new Set(this._data.alarms.map((alarm) => alarm.person).filter(Boolean))];
     const section = (id) => this._openSections.has(id) ? "open" : "";
     const soundMode = d.music_enabled ? "music" : d.tone === "none" ? "voice" : "tone";
-    const messageMode = d.briefing_enabled ? "assistant" : d.assistant_id ? "greeting" : "off";
+    const messageMode = this._editorModeMemory?.messageMode ?? (d.briefing_enabled ? "assistant" : d.assistant_id ? "greeting" : "off");
+    const wakeSummary = d.snooze_enabled
+      ? `${d.snooze_minutes} minutes · ${d.max_snoozes} snoozes`
+      : "Snooze off";
+    const phoneSummary = d.phone_enabled
+      ? `Phone controls on · ${d.phone_service ? this._serviceName(d.phone_service) : "Choose a phone"}${d.phone_wake_screen ? " · Screen wake on" : ""}`
+      : "Phone controls off";
+    const alertSummary = d.notify_enabled
+      ? `Help alerts on · ${this._serviceName(d.notify_service || "Home Assistant")}`
+      : "Help alerts off";
+    const sleepName = d.bedtime_entity
+      ? (this._hass?.states?.[d.bedtime_entity]?.attributes?.friendly_name || d.bedtime_entity)
+      : "No sleep switch selected";
+    const sleepSummary = d.bedtime_entity && d.clear_sleep_on_dismiss
+      ? `${sleepName} · Turn off on dismissal`
+      : sleepName;
     const repeats = [["weekdays", "Choose days"], ["once", "Just once"]];
     if (["school", "non_school"].includes(d.mode)) repeats.push([d.mode, "Keep current schedule"]);
     const calendarHelp = d.calendar_rule === "allow"
       ? "The alarm will ring only on selected days when an event title includes one of these phrases. Add at least one phrase."
       : "Selected days with an event title that includes one of these phrases will be skipped. Leave blank to skip no days.";
     const musicRampFields = d.music_ramp_enabled
-      ? `<div class="grid">${this._field("music_ramp_step", "Increase by (percentage points)", "number", 'min="1" max="25" required')}${this._field("music_ramp_seconds", "Every (seconds)", "number", 'min="30" max="300" required')}${this._field("max_volume", "Maximum speaker volume (%)", "number", 'min="1" max="100" required')}</div><p class="mode-help">Starts at ${esc(d.start_volume)}%, rises by ${esc(d.music_ramp_step)} points every ${esc(d.music_ramp_seconds)} seconds, up to ${esc(d.max_volume)}%. It does not restart music or repeat the voice. Snooze starts again at the starting volume; changing volume yourself pauses increases for that ring. Requires the updated MA companion.</p>`
+       ? `<div class="grid">${this._field("music_ramp_step", "Increase by (percentage points)", "number", 'min="1" max="25" required')}${this._field("music_ramp_seconds", "Every (seconds)", "number", 'min="30" max="300" required')}${this._field("max_volume", "Maximum speaker volume (%)", "number", 'min="1" max="100" required')}</div><p class="mode-help" data-ramp-summary>Starts at ${esc(d.start_volume)}%, rises by ${esc(d.music_ramp_step)} percentage points every ${esc(d.music_ramp_seconds)} seconds, up to ${esc(d.max_volume)}%. It does not restart music or repeat the voice. Snooze starts again at the starting volume; changing volume yourself pauses increases for that ring. Requires the updated MA companion.</p>`
       : `<div class="grid">${this._field("max_volume", "Maximum speaker volume (%)", "number", 'min="1" max="100" required')}${this._field("volume_step", "Increase per resumed ring (percentage points)", "number", 'min="0" max="25" required')}</div><p class="mode-help">No timed increases. Existing resume-volume behaviour is unchanged.</p>`;
     const soundFields = [
       `<div class="grid">${this._entity("speaker", "Play on", "media_player", false)}</div>`,
@@ -272,11 +362,13 @@ class HouseholdAlarmsCard extends HTMLElement {
         this._songPicker(),
         `<div class="grid">${this._field("start_volume", "Starting speaker volume (%)", "number", 'min="1" max="100" required')}</div>`,
         this._check("music_ramp_enabled", "Increase speaker volume over time"), musicRampFields,
-        messageMode !== "off" ? `<h4>Music and voice</h4><div class="grid">${this._field("music_gain", "Music under voice (%)", "number", 'min="1" max="30" required')}${this._field("speech_delay", "Music before voice (seconds)", "number", 'min="0" max="120" required')}</div>` : "",
+        messageMode !== "off"
+          ? `<h4>Music and voice</h4><div class="grid">${this._field("music_gain", "Music level under the voice (%)", "number", 'min="1" max="30" required')}${this._field("speech_delay", "Seconds of music before the voice", "number", 'min="0" max="120" required')}</div>`
+          : `<h4>Music settings</h4><div class="grid">${this._field("music_gain", "Music level (%)", "number", 'min="1" max="30" required')}</div>`,
       ].join("") : `<div class="grid">${this._field("start_volume", "Starting speaker volume (%)", "number", 'min="1" max="100" required')}${this._field("max_volume", "Maximum speaker volume (%)", "number", 'min="1" max="100" required')}${this._field("volume_step", soundMode === "tone" ? "Increase per tone repeat (percentage points)" : "Increase per tone fallback (percentage points)", "number", 'min="0" max="25" required')}${this._field("repeat_seconds", "Repeat tone every (seconds)", "number", 'min="30" max="300" required')}</div>`,
     ].join("");
     const messageFields = messageMode === "off"
-      ? '<button type="button" data-action="preview" ' + (this._busy ? "disabled" : "") + '>Preview message</button><span class="muted">Plays on this device</span>'
+      ? '<p>The morning message is off.</p>'
       : [
         `<div class="grid">${this._select("assistant_id", "Assistant", (this._data.assistants || []).map((item) => [item.id, item.name]), false, "Choose an assistant", true)}${messageMode === "assistant" ? this._entity("weather", "Weather location", "weather") : ""}</div>`,
         '<p>Your selected assistant provides the voice. Preview plays on this device.</p>',
@@ -291,10 +383,10 @@ class HouseholdAlarmsCard extends HTMLElement {
           ].join("") : "",
           `<details data-section="privacy" ${section("privacy")}><summary>About assistant messages</summary><p>During alarms and previews, your selected assistant receives your name, instructions, time, weather and filtered events from calendars you choose. Its voice provider receives the message text. The assistant keeps its usual permissions; asking it not to act does not remove them. For speech only, choose an assistant without smart-home controls. Preview plays on this device and does not change your alarm or sleep switch.</p></details>`,
           `<button type="button" data-action="preview" ${this._busy ? "disabled" : ""}>Preview message</button><span class="muted">Plays on this device</span>`,
-        ].join("") : '<button type="button" data-action="preview" ' + (this._busy ? "disabled" : "") + '>Preview message</button><span class="muted">Plays on this device</span>',
+        ].join("") : `<button type="button" data-action="preview" ${this._busy ? "disabled" : ""}>Preview message</button><span class="muted">Plays on this device</span>`,
       ].join("");
-    editor.innerHTML = `<form><header class="editor-header"><h3>${this._editingId ? "Edit alarm" : "New alarm"}</h3>${this._power(saved ? saved.enabled : d.enabled, saved?.id || "", this._busy || ACTIVE.has(saved?.run?.status))}</header>
-      <p>${saved ? "On or off changes straight away. Save your other changes below." : "New alarms start off. Save and test the sound before turning on."}</p>
+    editor.innerHTML = `<form><header class="editor-header"><h3>${this._editingId ? "Edit alarm" : "New alarm"}</h3></header>
+      <p>${saved ? "Use the alarm list to turn it on or off. Save your other changes below." : "New alarms start off. Save the alarm before using its list controls."}</p>
       <fieldset><legend>When</legend><div class="grid">
         ${this._field("name", "Alarm name", "text", 'required maxlength="100"')}
         ${this._field("person", "Who is it for? (optional)", "text", 'list="people" maxlength="100"')}<datalist id="people">${people.map((person) => `<option>${esc(person)}</option>`).join("")}</datalist>
@@ -310,19 +402,19 @@ class HouseholdAlarmsCard extends HTMLElement {
       ${d.mode === "school" ? '<p>Set the latest wake-up time under Snooze and wake-up limits.</p>' : ""}</fieldset>
       <fieldset><legend>Sound</legend>${soundFields}</fieldset>
       <fieldset><legend>Morning message</legend>${this._modeButtons("message", messageMode, [["off", "Off"], ["greeting", "Simple greeting"], ["assistant", "Assistant-written"]])}${messageFields}</fieldset>
-      <details class="settings-panel" data-section="wake-limits" ${section("wake-limits")}><summary>Snooze and wake-up limits<span class="settings-summary">Snooze options and latest wake-up time</span></summary>
+      <details class="settings-panel" data-section="wake-limits" ${section("wake-limits")}><summary>Snooze and wake-up limits<span class="settings-summary" data-summary="wake-limits">${wakeSummary}${d.deadline ? ` · Get up by ${esc(d.deadline)}` : ""}</span></summary>
         ${this._check("snooze_enabled", "Allow snooze")}
         ${d.snooze_enabled ? `<div class="grid">${this._field("snooze_minutes", "Snooze minutes", "number", 'min="1" max="30" required')}${this._field("max_snoozes", "How many times?", "number", 'min="0" max="10" required')}</div>` : '<p>Snooze length and count are hidden while snooze is off.</p>'}
         ${d.mode === "school" ? this._field("deadline", "Latest wake-up time", "time", "required") + '<p>Snoozes stop at this time. The alarm keeps ringing until you stop it.</p>' : this._field("deadline", "Latest wake-up time (optional)", "time")}
         ${d.mode !== "school" ? this._check("allow_sleep_in", "Allow sleeping in") : '<p>This saved alarm does not allow sleeping in.</p>'}
       </details>
-      <details class="settings-panel" data-section="phone-controls" ${section("phone-controls")}><summary>Phone controls<span class="settings-summary">Optional Dismiss and Snooze actions on a Companion phone</span></summary>${this._check("phone_enabled", "Show Dismiss and Snooze when this alarm rings")}
+      <details class="settings-panel" data-section="phone-controls" ${section("phone-controls")}><summary>Phone controls<span class="settings-summary" data-summary="phone-controls">${esc(phoneSummary)}</span></summary>${this._check("phone_enabled", "Show Dismiss and Snooze when this alarm rings")}
         ${d.phone_enabled ? `${this._select("phone_service", "Send alarm controls to", (this._data.phone_targets || []).map((item) => [item.service, item.service.replace(/^notify\.mobile_app_/, "").replace(/_/g, " ") + " — " + item.service]), false)}${this._check("phone_wake_screen", "Wake the phone screen (Android only)")}<p>Anyone holding the phone can use its lock-screen buttons. Snooze uses this alarm's limits and deadline. Your phone must allow Companion notifications and lock-screen content; screen wake needs an identified Android phone and enabled notification commands.</p>` : ""}
       </details>
-      <details class="settings-panel" data-section="help-alerts" ${section("help-alerts")}><summary>Help alerts<span class="settings-summary">Choose whether and where to send a message</span></summary>${this._check("notify_enabled", "Send a message if help is needed")}
+      <details class="settings-panel" data-section="help-alerts" ${section("help-alerts")}><summary>Help alerts<span class="settings-summary" data-summary="help-alerts">${esc(alertSummary)}</span></summary>${this._check("notify_enabled", "Send a message if help is needed")}
         ${d.notify_enabled ? `<p>Let someone know when:</p><ul class="notification-help"><li>The alarm has not been stopped by the latest wake-up time.</li><li>You choose to sleep in.</li><li>The speaker cannot play the alarm.</li></ul>${this._select("notify_service", "Send to", this._data.notify_services.map((id) => [id, id.replace(/^notify\.(mobile_app_)?/, "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())]), true, "Home Assistant only")}<p>${d.notify_service ? "Messages will go to the person or group you choose." : "Choose a phone or group above to send a phone message. Otherwise, the message only appears in Home Assistant."}</p>` : ""}
       </details>
-      <details class="settings-panel" data-section="sleep-switch" ${section("sleep-switch")}><summary>Sleep switch<span class="settings-summary">Skip this alarm when the selected switch is off</span></summary>${this._entity("bedtime_entity", "Existing sleep switch (optional)", "input_boolean")}
+      <details class="settings-panel" data-section="sleep-switch" ${section("sleep-switch")}><summary>Sleep switch<span class="settings-summary" data-summary="sleep-switch">${esc(sleepSummary)}</span></summary>${this._entity("bedtime_entity", "Existing sleep switch (optional)", "input_boolean")}
         ${d.bedtime_entity ? this._check("clear_sleep_on_dismiss", "Turn off on dismissal") + '<p>Snooze and Sleep in leave the switch alone.</p>' : ""}
       </details>
       <p>Other alarms are not changed. Test the sound before relying on it. A spoken sentence may finish after you stop the alarm.</p>
@@ -330,6 +422,8 @@ class HouseholdAlarmsCard extends HTMLElement {
       <div class="actions"><button class="primary" type="submit" ${this._busy ? "disabled" : ""}>${this._busy ? "Working…" : "Save alarm"}</button><button type="button" data-action="cancel" ${this._busy ? "disabled" : ""}>Cancel</button></div></form>`;
     this._showMessage();
     this._configureEntitySelectors();
+    this._updateSectionSummaries();
+    this._restoreEditorFocus(focus, editor);
   }
 
   _showMessage() {
@@ -392,6 +486,8 @@ class HouseholdAlarmsCard extends HTMLElement {
     if (!this._draft || !input.dataset.field) return;
     if (input.tagName === "SELECT" || input.type === "checkbox") return;
     this._draft[input.dataset.field] = input.type === "number" ? Number(input.value) : input.value;
+    if (["start_volume", "music_ramp_step", "music_ramp_seconds", "max_volume"].includes(input.dataset.field)) this._updateRampSummary();
+    this._updateSectionSummaries();
   }
 
   _change(event) {
@@ -414,6 +510,7 @@ class HouseholdAlarmsCard extends HTMLElement {
     this._draft[field] = input.type === "checkbox" ? input.checked : input.type === "number" || field === "briefing_words" ? Number(input.value) : input.value;
     if (field === "tone" && input.value !== "none" && this._editorModeMemory) this._editorModeMemory.tone = input.value;
     if (field === "assistant_id" && this._editorModeMemory) this._editorModeMemory.assistantId = input.value;
+    this._updateSectionSummaries();
     if (field === "speaker") { this._draft.music_track = ""; this._draft.music_track_name = ""; this._draft.music_server = ""; this._tracks = []; this._trackStatus = ""; this._trackError = false; this._choosingTrack = false; }
     if (field === "music_enabled" || field === "music_ramp_enabled" || field === "speaker") this._renderEditor();
     if (field === "phone_enabled" || field === "phone_service" || field === "snooze_enabled" || field === "notify_enabled") this._renderEditor();
@@ -439,7 +536,11 @@ class HouseholdAlarmsCard extends HTMLElement {
     this._messageError = false;
     this._editRevision = this._data.revision;
     this._draft = alarm ? this._configuration(alarm) : clone(this._data.defaults);
-    this._editorModeMemory = { tone: this._draft.tone === "none" ? this._data.defaults.tone || "chime" : this._draft.tone, assistantId: this._draft.assistant_id };
+    this._editorModeMemory = {
+      tone: this._draft.tone === "none" ? this._data.defaults.tone || "chime" : this._draft.tone,
+      assistantId: this._draft.assistant_id,
+      messageMode: this._draft.briefing_enabled ? "assistant" : this._draft.assistant_id ? "greeting" : "off",
+    };
     this._tracks = []; this._trackQuery = "";
     this._trackStatus = ""; this._trackError = false; this._trackSearching = false; this._choosingTrack = false;
     this._openSections = new Set();
@@ -468,17 +569,31 @@ class HouseholdAlarmsCard extends HTMLElement {
   _save() {
     return this._operation(async () => {
       const config = clone(this._draft);
-      if (config.tone === "none" && !config.assistant_id) {
+      const messageMode = this._editorModeMemory?.messageMode ?? (config.briefing_enabled ? "assistant" : config.assistant_id ? "greeting" : "off");
+      const availableAssistant = (this._data.assistants || []).some((item) => item.id === config.assistant_id);
+      if (config.tone === "none" && messageMode === "off") {
         this._message = "Choose a morning message before saving Voice only.";
         this._messageError = true;
+        this._editorModeMemory.messageMode = "greeting";
+        this._focusAfterEditorRender = "assistant_id";
         return;
       }
-      if (!config.briefing_enabled) config.schedule_enabled = false;
+      if (messageMode !== "off" && !availableAssistant) {
+        this._message = "Choose an assistant for the selected morning message.";
+        this._messageError = true;
+        this._focusAfterEditorRender = "assistant_id";
+        return;
+      }
+      config.briefing_enabled = messageMode === "assistant";
+      if (messageMode !== "assistant") config.schedule_enabled = false;
+      if (messageMode === "off") config.assistant_id = "";
       if (this._editingId) config.enabled = this._data.alarms.find((alarm) => alarm.id === this._editingId)?.enabled ?? config.enabled;
       else if (config.enabled && !window.confirm("Save and turn on this alarm? Please check its sound first.")) return;
       await this._hass.callWS({ type: "household_alarms/save", config,
         expected_revision: this._editRevision, ...(this._editingId ? { alarm_id: this._editingId } : {}) });
       this._draft = null;
+      this._editingId = null;
+      this._editorModeMemory = null;
       await this._refresh();
       this._message = "Alarm saved. You can test its sound now.";
     });
@@ -538,16 +653,13 @@ class HouseholdAlarmsCard extends HTMLElement {
       if (alarmId) {
         const item = this._data.alarms.find((item) => item.id === alarmId);
         await this._toggle(alarmId, !item.enabled);
-      } else if (this._draft) {
-        this._draft.enabled = !this._draft.enabled;
-        button.outerHTML = this._power(this._draft.enabled);
       }
       return;
     }
     if (action === "retry") { this._connection = null; this._connect(); return; }
     if (action === "new") { this._edit(); return; }
     if (action === "edit") { this._edit(alarm); return; }
-    if (action === "cancel") { this._draft = null; this._message = ""; this._messageError = false; this._renderEditor(); this._showMessage(); return; }
+    if (action === "cancel") { this._draft = null; this._editingId = null; this._editorModeMemory = null; this._message = ""; this._messageError = false; this._renderEditor(); this._showMessage(); return; }
     if (action === "preview") { await this._openPreview(); return; }
     if (action === "close-preview") { this._closePreview(); return; }
     if (action === "play-preview") { await this._playPreview(); return; }

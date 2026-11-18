@@ -47,7 +47,13 @@ def clock(value: str) -> time:
         raise AlarmError("Invalid time") from err
 
 
-def validate(data: dict, alarm_id: str | None = None, *, require_speaker: bool = True) -> dict:
+def validate(
+    data: dict,
+    alarm_id: str | None = None,
+    *,
+    require_speaker: bool = True,
+    require_spoken_assistant: bool = False,
+) -> dict:
     """Validate a complete configuration; never accept runtime fields from clients."""
     if not isinstance(data, dict) or set(data) - (set(DEFAULTS) | RETIRED_PLAYBACK_FIELDS | {"id"}):
         raise AlarmError("Unknown alarm settings")
@@ -81,6 +87,8 @@ def validate(data: dict, alarm_id: str | None = None, *, require_speaker: bool =
     for key in ("enabled", "snooze_enabled", "allow_sleep_in", "notify_enabled", "briefing_enabled", "schedule_enabled", "clear_sleep_on_dismiss", "music_enabled", "music_ramp_enabled", "phone_enabled", "phone_wake_screen"):
         if type(result[key]) is not bool:
             raise AlarmError(f"Invalid {key}")
+    if require_spoken_assistant and (result["briefing_enabled"] or result["tone"] == "none") and not result["assistant_id"]:
+        raise AlarmError("Choose an assistant for the selected morning message")
     limits = {
         "start_volume": (1, 100), "max_volume": (1, 100), "volume_step": (0, 25),
         "repeat_seconds": (30, 300), "snooze_minutes": (1, 30), "max_snoozes": (0, 10),

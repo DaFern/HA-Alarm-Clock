@@ -178,6 +178,20 @@ class RuleTests(unittest.TestCase):
             self.assertEqual(alarm["assistant_id"], "")
             self.assertNotIn("agent", alarm)
 
+    def test_saved_spoken_modes_require_a_named_assistant(self):
+        for fields in ({"tone": "none"}, {"briefing_enabled": True}):
+            with self.subTest(fields=fields), self.assertRaisesRegex(
+                model.AlarmError, "Choose an assistant"
+            ):
+                model.validate(config(**fields), require_spoken_assistant=True)
+        self.assertEqual(
+            model.validate(
+                config(tone="none", assistant_id="assistant-test", briefing_enabled=True),
+                require_spoken_assistant=True,
+            )["assistant_id"],
+            "assistant-test",
+        )
+
     def test_no_school_sleep_in_or_missing_deadline(self):
         for overrides in ({"allow_sleep_in": True, "deadline": "07:30"}, {"deadline": ""}):
             with self.assertRaises(model.AlarmError):
@@ -381,6 +395,23 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
     async def create(self, **overrides):
         return await self.manager.async_put(config(**overrides), self.manager.revision)
 
+    async def test_save_rejects_spoken_mode_without_assistant(self):
+        for fields in ({"tone": "none"}, {"briefing_enabled": True}):
+            with self.subTest(fields=fields), self.assertRaisesRegex(
+                model.AlarmError, "Choose an assistant"
+            ):
+                await self.manager.async_put(config(**fields), self.manager.revision)
+        self.assertEqual(self.manager.alarms, {})
+
+    async def test_legacy_spoken_alarm_can_still_be_toggled(self):
+        alarm_id = await self.create(assistant_id="assistant-test", briefing_enabled=True)
+        self.manager.alarms[alarm_id]["assistant_id"] = ""
+        legacy = deepcopy(self.manager.alarms[alarm_id])
+        legacy["enabled"] = True
+        await self.manager.async_put(legacy, self.manager.revision, alarm_id)
+        self.assertTrue(self.manager.alarms[alarm_id]["enabled"])
+        self.assertEqual(self.manager.alarms[alarm_id]["assistant_id"], "")
+
     async def settle(self):
         await asyncio.gather(*list(self.manager.tasks.values()), *list(self.manager.alert_tasks.values()), return_exceptions=True)
         await asyncio.sleep(0)
@@ -532,7 +563,14 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
     async def test_deleted_assistant_and_migrated_voice_only_alarm_use_tone(self):
         for assistant_id in ("", "deleted"):
             with self.subTest(assistant_id=assistant_id):
-                alarm_id = await self.create(assistant_id=assistant_id, briefing_enabled=True, tone="none")
+                alarm_id = await self.create(
+                    assistant_id=assistant_id or "assistant-test",
+                    briefing_enabled=True,
+                    tone="none",
+                )
+                if not assistant_id:
+                    # Simulate a pre-validation saved alarm; new saves reject this state.
+                    self.manager.alarms[alarm_id]["assistant_id"] = ""
                 self.manager.runs[alarm_id] = run_at(self.now)
                 self.hass.services.calls.clear()
                 await self.fast_delivery(alarm_id)

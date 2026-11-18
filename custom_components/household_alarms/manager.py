@@ -69,7 +69,7 @@ class AlarmManager:
                 alarm_id = str(uuid.UUID(item["id"]))
                 if alarm_id in self.alarms:
                     raise ValueError
-                self.alarms[alarm_id] = validate(item, alarm_id)
+                self.alarms[alarm_id] = validate(item, alarm_id, require_spoken_assistant=False)
             self.revision = int(data.get("revision", 0))
             for alarm_id, run in data.get("runs", {}).items():
                 if alarm_id not in self.alarms:
@@ -171,8 +171,16 @@ class AlarmManager:
                 raise AlarmError("Alarm no longer exists")
             if not alarm_id and len(self.alarms) >= MAX_ALARMS:
                 raise AlarmError("Alarm limit reached")
-            alarm = validate(config, alarm_id)
-            old = self.alarms.get(alarm["id"])
+            old = self.alarms.get(alarm_id) if alarm_id else None
+            alarm = validate(config, alarm_id, require_spoken_assistant=False)
+            legacy_toggle = bool(
+                old
+                and alarm["enabled"] != old["enabled"]
+                and {key: value for key, value in alarm.items() if key != "enabled"}
+                == {key: value for key, value in old.items() if key != "enabled"}
+            )
+            if not legacy_toggle:
+                alarm = validate(config, alarm_id, require_spoken_assistant=True)
             run = self.runs.get(alarm["id"])
             if run and run["status"] in ACTIVE:
                 raise AlarmError("Dismiss the active alarm before changing its settings")
