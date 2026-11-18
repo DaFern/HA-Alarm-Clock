@@ -14,11 +14,11 @@ class HouseholdAlarmsCard extends HTMLElement {
     this._draft = null;
     this._busy = false;
     this._generation = 0;
-    this._voiceGeneration = 0;
-    this._languages = [];
-    this._voices = [];
+    this._previewGeneration = 0;
     this._message = "";
     this._openSections = new Set();
+    this._tracks = [];
+    this._trackQuery = "";
     this.shadowRoot.addEventListener("click", (event) => this._click(event));
     this.shadowRoot.addEventListener("input", (event) => this._input(event));
     this.shadowRoot.addEventListener("change", (event) => this._change(event));
@@ -49,6 +49,7 @@ class HouseholdAlarmsCard extends HTMLElement {
   }
 
   disconnectedCallback() {
+    this._closePreview();
     this._generation++;
     this._unsubscribe?.();
     this._unsubscribe = null;
@@ -68,7 +69,7 @@ class HouseholdAlarmsCard extends HTMLElement {
         this._data = data;
         this._loadError = "";
         if (!this.shadowRoot.querySelector("#list")) this._render();
-        else { this._renderList(); this._syncPower(); }
+        else { this._renderList(); this._syncPower(); this._renderMusic(); }
       }, { type: "household_alarms/subscribe" });
       if (generation !== this._generation || !this.isConnected) unsubscribe();
       else this._unsubscribe = unsubscribe;
@@ -120,6 +121,7 @@ class HouseholdAlarmsCard extends HTMLElement {
   }
 
   _render() {
+    this._closePreview();
     this.shadowRoot.innerHTML = `<style>
       :host{display:block;color:var(--primary-text-color);font-family:var(--paper-font-body1_-_font-family,system-ui)}
       ha-card{display:block;padding:18px;border-radius:var(--ha-card-border-radius,16px);background:var(--ha-card-background,var(--card-background-color));border:1px solid var(--divider-color)}
@@ -129,14 +131,16 @@ class HouseholdAlarmsCard extends HTMLElement {
       .notice{white-space:pre-wrap;background:var(--secondary-background-color);padding:10px;border-radius:10px;font-size:13px;line-height:1.5;margin:12px 0}.error{color:var(--error-color,#db4437)}[hidden]{display:none!important}form{margin-top:18px;border-top:1px solid var(--divider-color);padding-top:18px}fieldset{border:1px solid var(--divider-color);border-radius:12px;margin:12px 0;padding:14px}legend{font-weight:600;padding:0 6px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}label{display:flex;flex-direction:column;gap:6px;font-size:13px;min-width:0}input,select,textarea{box-sizing:border-box;width:100%;min-height:44px;font:inherit;color:var(--primary-text-color);background:var(--secondary-background-color);border:1px solid var(--divider-color);border-radius:8px;padding:10px}input[type=checkbox]{width:22px;min-height:22px;accent-color:var(--primary-color)}.check{flex-direction:row;align-items:center;gap:10px;padding:6px 0;min-height:32px}.days{display:flex;flex-wrap:wrap;gap:12px}.days label{flex-direction:row;align-items:center}textarea{min-height:110px;resize:vertical}.full{grid-column:1/-1}.preview{white-space:pre-wrap}.right{margin-left:auto}
       :host{font-size:16px}label,.actions button{font-size:16px}input,select,textarea{font-size:16px;min-height:48px}input[type=checkbox]{min-height:24px;width:24px}.check{min-height:44px}.power{display:inline-flex;align-items:center;gap:10px;min-width:104px;border:none}.track{display:inline-flex;align-items:center;width:46px;height:28px;border-radius:18px;background:var(--disabled-color,#777);padding:3px;box-sizing:border-box}.track span{display:block;width:22px;height:22px;border-radius:50%;background:#fff}.is-on .track{background:var(--primary-color)}.is-on .track span{transform:translateX(18px)}details{margin:18px 0;border-top:1px solid var(--divider-color);padding-top:14px}summary{font-weight:600;cursor:pointer;min-height:44px;line-height:44px}.editor-header{justify-content:space-between}.section-help{margin-bottom:0}a{color:var(--primary-color);display:inline-block;min-height:32px;line-height:32px}.notification-help{font-size:15px;line-height:1.6;padding-left:22px}
       .alarm-actions{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:stretch}.alarm-actions button{width:100%;box-sizing:border-box;white-space:nowrap}.alarm-actions [data-action=delete]{grid-column:1/-1}
+      dialog{box-sizing:border-box;width:min(560px,calc(100vw - 24px));max-height:85vh;overflow:auto;border:1px solid var(--divider-color);border-radius:16px;padding:20px;background:var(--card-background-color,#191919);color:var(--primary-text-color)}dialog::backdrop{background:#0009}dialog audio{width:100%;margin:12px 0}dialog .preview-text{white-space:pre-wrap;overflow-wrap:anywhere}
       @media(max-width:480px){.grid{grid-template-columns:1fr}.full{grid-column:auto}ha-card{padding:14px}.actions button{flex:1}.time{font-size:28px}}
     </style><ha-card><header><h2>Alarms</h2><button class="primary" data-action="new" ${!this._data ? "disabled" : ""}>＋ Add alarm</button></header>
       <p>Choose when and where your alarms ring.</p>
       <div id="message" role="status" aria-live="polite"></div>
       ${this._loadError ? `<div class="notice error">${esc(this._loadError)}</div><button data-action="retry">Retry connection</button>` : ""}
-      <div id="list"></div><div id="editor"></div></ha-card>`;
+      <div id="list"></div><div id="editor"></div><div id="music-test"></div></ha-card>`;
     this._renderList();
     this._renderEditor();
+    this._renderMusic();
     this._showMessage();
   }
 
@@ -158,6 +162,7 @@ class HouseholdAlarmsCard extends HTMLElement {
           ${this._power(alarm.enabled, alarm.id, active || this._busy)}</div>
           <p>${esc(schedule)} · ${esc(speaker)}${alarm.deadline ? " · Get up by " + esc(alarm.deadline) : ""}<br>Next alarm: ${esc(next)}</p>
           ${run?.error ? `<div class="notice error">${esc(run.error)}</div>` : ""}
+          ${alarm.assistant_warning ? `<div class="notice">${esc(alarm.assistant_warning)}</div>` : ""}
           ${this._data.test_results?.[alarm.id] ? `<div class="notice">${esc(this._data.test_results[alarm.id])}</div>` : ""}
           <div class="actions ${active ? "" : "alarm-actions"}">${active ? `<button data-action="snooze" ${!alarm.snooze_enabled || run.snoozes >= alarm.max_snoozes || run.escalated ? "disabled" : ""}>Snooze</button><button class="primary" data-action="dismiss">Stop alarm</button>${alarm.allow_sleep_in && alarm.mode !== "school" ? '<button data-action="sleep_in">Sleep in</button>' : ""}` : '<button data-action="edit">Edit</button><button data-action="test">Test</button><button data-action="delete">Delete</button>'}</div></section>`;
       }).join("") : '<p>No alarms yet. Add an alarm, save it, then test the sound before turning it on.</p>');
@@ -197,6 +202,14 @@ class HouseholdAlarmsCard extends HTMLElement {
         ${this._select("tone", "Alarm sound", [["chime", "Chime"], ["bell", "Bell"], ["digital", "Digital"], ["none", "Voice only"]], false)}
         ${this._field("start_volume", "Starting volume (%)", "number", 'min="1" max="100" required')}
       </div></fieldset>
+      <fieldset><legend>Music</legend>${this._check("music_enabled", "Play a Music Assistant song instead of a tone")}
+      ${d.music_enabled ? `<p>Requires the pinned HA-AlarmClock MA companion and an idle, empty, ungrouped queue. Add songs to that server's library first. Music repeats until you stop the alarm; Snooze restarts the same song without the message.</p>
+      <label>Search your speaker's MA song library<input data-track-query maxlength="100" value="${esc(this._trackQuery)}" placeholder="Song or artist"></label>
+      <button type="button" data-action="search-tracks" ${this._busy || !d.speaker ? "disabled" : ""}>Search songs</button>
+      <p role="status">Selected song: ${esc(d.music_track_name || d.music_track || "None")}</p>
+      <div class="actions">${this._tracks.map((track, index) => `<button type="button" data-action="choose-track" data-track-index="${index}">${esc(track.name)}</button>`).join("")}</div>
+      <div class="grid">${this._field("music_gain", "Background music gain (%)", "number", 'min="1" max="30" required')}${this._field("speech_delay", "Music before voice (seconds)", "number", 'min="0" max="120" required')}</div>
+      <p>The delay starts with the music, after message preparation. Choose an assistant under More settings for speech. Short songs can end before a long delay or message finishes. Music alarms do not interrupt someone else's queue.</p>` : ""}</fieldset>
       <details data-section="more" ${section("more")}><summary>More settings</summary>
       <fieldset><legend>Snooze</legend>${this._check("snooze_enabled", "Allow snooze")}<div class="grid">
         ${this._field("snooze_minutes", "Snooze minutes", "number", 'min="1" max="30" required')}
@@ -208,22 +221,20 @@ class HouseholdAlarmsCard extends HTMLElement {
       ${this._select("notify_service", "Send to", this._data.notify_services.map((id) => [id, id.replace(/^notify\.(mobile_app_)?/, "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())]), true, "Home Assistant only")}
       <p>${d.notify_service ? "Messages will go to the person or group you choose." : "Choose a phone or group above to send a phone message. Otherwise, the message only appears in Home Assistant."}</p></fieldset>
       <fieldset><legend>Morning message</legend>${this._check("briefing_enabled", "Let my assistant write a good morning message")}
-      <div class="grid">${this._entity("agent", "Assistant", "conversation")}${this._entity("weather", "Weather location", "weather")}
-      ${this._select("tts", "Voice service", this._choices("tts").map((state) => [state.entity_id, state.attributes.friendly_name || state.entity_id]), true, "No spoken message")}
-      ${this._select("language", "Language", this._languages, true, "Use the service's usual language")}
-      ${this._select("voice", "Voice", this._voices.map((v) => [v.voice_id, v.name || v.voice_id]), true, "Use the service's usual voice")}</div>
-      <p>Choose a language to see its available voices. A voice service is needed for spoken messages. Without one, the alarm can still play its chosen sound.</p>
+      <div class="grid">${this._select("assistant_id", "Choose an assistant", (this._data.assistants || []).map((item) => [item.id, item.name]), true, "No spoken message")}${this._entity("weather", "Weather location", "weather")}</div>
+      <p>Your assistant uses its configured voice and language. Change these in Settings → Voice assistants. Without an available voice, the alarm uses a tone.</p>
       ${this._select("briefing_words", "Message length", [["100", "Short — up to 100 words"], ["200", "Medium — up to 200 words"], ["300", "Long — up to 300 words"]], false)}
       <label>What would you like it to say?<textarea data-field="instructions" maxlength="10000">${esc(d.instructions)}</textarea></label><p>Up to 10,000 characters of instructions. Choose the spoken message length separately above.</p>
       <p>Your assistant can include the time and weather. If it is unavailable, the alarm still rings.</p>
       ${this._check("schedule_enabled", "Include today's schedule")}
       ${d.schedule_enabled ? `<p>Choose the calendars to read. Only these calendars are shared with your assistant. Shared calendars may include other people's events.</p><div>${this._choices("calendar").map((state) => `<label class="check"><input type="checkbox" data-schedule-calendar="${esc(state.entity_id)}" ${(d.schedule_calendars || []).includes(state.entity_id) ? "checked" : ""}>${esc(state.attributes.friendly_name || state.entity_id)}</label>`).join("") || '<p>No calendars found. Add a calendar in Home Assistant first.</p>'}</div><p>Turn on the assistant's morning message above to hear your schedule. If a calendar cannot be read, the message will say so.</p>` : ""}
       ${d.schedule_enabled ? `<label>Only include events containing<textarea data-field="schedule_include" maxlength="2000">${esc(d.schedule_include || "")}</textarea></label><p>One word or phrase per line. Keep events matching any phrase. Leave blank to include everything.</p><label>Exclude events containing<textarea data-field="schedule_exclude" maxlength="2000">${esc(d.schedule_exclude || "")}</textarea></label><p>One word or phrase per line. Matching ignores capital letters. Exclusions always win. These filters check event titles before sharing them with your assistant.</p>` : ""}
-      <button type="button" data-action="preview" ${this._busy ? "disabled" : ""}>Preview message (no sound)</button><div id="preview" class="notice preview" ${this._preview ? "" : "hidden"}>${esc(this._preview)}</div>
-      <details data-section="privacy" ${section("privacy")}><summary>About assistant messages</summary><p>Your chosen assistant receives your name, instructions, weather and today's events from any calendars you select. It keeps its usual permissions. For speech only, use an assistant without smart-home controls. Speaker and voice services need to be available.</p></details></fieldset>
+      <button type="button" data-action="preview" ${this._busy ? "disabled" : ""}>Preview message</button>
+      <details data-section="privacy" ${section("privacy")}><summary>About assistant messages</summary><p>During alarms and previews, your selected assistant receives your name, instructions, time, weather and filtered events from calendars you choose. Its voice provider receives the message text. The assistant keeps its usual permissions; asking it not to act does not remove them. For speech only, choose an assistant without smart-home controls. Preview plays on this device, not your alarm speaker, and does not change your alarm or sleep switch.</p></details></fieldset>
       <fieldset><legend>Sound options</legend><div class="grid">${this._field("max_volume", "Loudest volume (%)", "number", 'min="1" max="100" required')}
       ${this._field("volume_step", "Get louder each time by (%)", "number", 'min="0" max="25" required')}${this._field("repeat_seconds", "Repeat sound every (seconds)", "number", 'min="30" max="300" required')}</div></fieldset>
-      <fieldset><legend>Link to a sleep switch</legend>${this._entity("bedtime_entity", "Existing sleep switch (optional)", "input_boolean")}<p>Leave this blank unless you already use a switch to show someone is asleep. When that switch is off, this alarm will not ring. Stopping the alarm does not change the switch.</p></fieldset>
+      <fieldset><legend>Link to a sleep switch</legend>${this._entity("bedtime_entity", "Existing sleep switch (optional)", "input_boolean")}<p>Leave this blank unless you use a switch to show someone is asleep. If it is off when the alarm is due, that day's alarm is skipped. Future days stay enabled.</p>
+      ${d.bedtime_entity ? this._check("clear_sleep_on_dismiss", "Turn off the sleep switch when I dismiss the alarm") + '<p>Snooze and Sleep in leave the switch alone.</p>' : ""}</fieldset>
       <p>Other alarms are not changed. Test the sound before relying on it. A spoken sentence may finish after you stop the alarm.</p></details>
       <div class="actions"><button class="primary" type="submit" ${this._busy ? "disabled" : ""}>${this._busy ? "Working…" : "Save alarm"}</button><button type="button" data-action="cancel" ${this._busy ? "disabled" : ""}>Cancel</button></div></form>`;
   }
@@ -233,8 +244,33 @@ class HouseholdAlarmsCard extends HTMLElement {
     if (element) { element.className = this._message ? "notice" : ""; element.textContent = this._message; }
   }
 
+  _renderMusic(force = false) {
+    const root = this.shadowRoot.querySelector("#music-test");
+    if (!root || !this._data) return;
+    const session = this._data.music_test;
+    const active = session && !["dismissed", "sleeping_in", "finished", "failed", "interrupted"].includes(session.status);
+    root.hidden = !session;
+    if (!session) { root.innerHTML = ""; return; }
+    root.innerHTML = `<details data-section="music-test" open><summary>Saved alarm music test</summary>
+      <p>Saved alarms and sleep switches stay unchanged. Music repeats until stopped (30-minute test maximum). Test Snooze uses the saved alarm's minutes.</p>
+      ${session ? `<div class="notice" role="status" aria-live="polite">${esc(session.status)}${session.track ? " · " + esc(session.track) : ""}<br>${esc(session.message)}</div>` : ""}
+      <div class="actions">${active ? `<button data-action="music-snooze" ${session.status !== "playing" || this._busy ? "disabled" : ""}>Snooze test</button><button class="primary" data-action="music-dismiss" ${this._busy ? "disabled" : ""}>Dismiss test</button><button data-action="music-sleep_in" ${this._busy ? "disabled" : ""}>Sleep in (test)</button>` : ""}</div></details>`;
+  }
+
+  _musicOperation(action) {
+    return this._operation(async () => {
+      const session = this._data.music_test;
+      if (["snooze", "dismiss", "sleep_in"].includes(action)) {
+        await this._hass.callWS({ type: "household_alarms/music_action", session_id: session.id, action });
+        this._message = "Music-test control requested. Check its status below.";
+      }
+      await this._refresh();
+    });
+  }
+
   _input(event) {
     const input = event.target;
+    if (input.hasAttribute("data-track-query")) { this._trackQuery = input.value; return; }
     if (!this._draft || !input.dataset.field) return;
     if (input.tagName === "SELECT" || input.type === "checkbox") return;
     this._draft[input.dataset.field] = input.type === "number" ? Number(input.value) : input.value;
@@ -256,6 +292,8 @@ class HouseholdAlarmsCard extends HTMLElement {
     const field = input.dataset.field;
     if (!field) return;
     this._draft[field] = input.type === "checkbox" ? input.checked : input.type === "number" || field === "briefing_words" ? Number(input.value) : input.value;
+    if (field === "speaker") { this._draft.music_track = ""; this._draft.music_track_name = ""; this._draft.music_server = ""; this._tracks = []; }
+    if (field === "music_enabled" || field === "speaker") this._renderEditor();
     if (field === "mode") {
       if (input.value === "school") {
         this._draft.allow_sleep_in = false;
@@ -263,34 +301,8 @@ class HouseholdAlarmsCard extends HTMLElement {
       this._renderEditor();
     }
     if (field === "calendar" && !this._draft.calendar && this._draft.calendar_rule === "allow") this._draft.calendar_rule = "block";
-    if (field === "calendar" || field === "calendar_rule" || field === "notify_service" || field === "schedule_enabled") this._renderEditor();
-    if (field === "tts" || field === "language") {
-      this._draft.voice = "";
-      if (field === "tts") this._draft.language = "";
-      this._loadVoices();
-    }
-  }
-
-  async _loadVoices() {
-    const generation = ++this._voiceGeneration;
-    this._voices = [];
-    this._languages = [];
-    const engine = this._draft?.tts;
-    const language = this._draft?.language;
-    if (!engine) { this._renderEditor(); return; }
-    try {
-      const { provider } = await this._hass.callWS({ type: "tts/engine/get", engine_id: engine });
-      const voices = language ? await this._hass.callWS({ type: "tts/engine/voices", engine_id: engine, language }) : { voices: [] };
-      if (generation !== this._voiceGeneration || !this._draft) return;
-      this._languages = provider.supported_languages || [];
-      this._voices = voices.voices || [];
-      this._renderEditor();
-    } catch (error) {
-      if (generation !== this._voiceGeneration || !this._draft) return;
-      this._message = "Could not load the voices. Check that the voice service is available. Nothing was played.";
-      this._showMessage();
-      this._renderEditor();
-    }
+    if (field === "bedtime_entity" && !this._draft.bedtime_entity) this._draft.clear_sleep_on_dismiss = false;
+    if (field === "calendar" || field === "calendar_rule" || field === "notify_service" || field === "schedule_enabled" || field === "bedtime_entity") this._renderEditor();
   }
 
   _configuration(alarm) {
@@ -302,10 +314,9 @@ class HouseholdAlarmsCard extends HTMLElement {
     this._editingId = alarm?.id || null;
     this._editRevision = this._data.revision;
     this._draft = alarm ? this._configuration(alarm) : clone(this._data.defaults);
+    this._tracks = []; this._trackQuery = "";
     this._openSections = new Set();
-    this._preview = "";
     this._renderEditor();
-    this._loadVoices();
     this.shadowRoot.querySelector("#editor")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
@@ -319,6 +330,7 @@ class HouseholdAlarmsCard extends HTMLElement {
       this._busy = false;
       this._renderList();
       this._renderEditor();
+      this._renderMusic(true);
       this._showMessage();
     }
   }
@@ -333,7 +345,6 @@ class HouseholdAlarmsCard extends HTMLElement {
       await this._hass.callWS({ type: "household_alarms/save", config,
         expected_revision: this._editRevision, ...(this._editingId ? { alarm_id: this._editingId } : {}) });
       this._draft = null;
-      this._voiceGeneration++;
       await this._refresh();
       this._message = "Alarm saved. You can test its sound now.";
     });
@@ -358,6 +369,21 @@ class HouseholdAlarmsCard extends HTMLElement {
     const button = event.target.closest("button[data-action]");
     if (!button || button.disabled || this._busy) return;
     const action = button.dataset.action;
+    if (action === "search-tracks") {
+      await this._operation(async () => {
+        const result = await this._hass.callWS({ type: "household_alarms/tracks", speaker: this._draft.speaker, query: this._trackQuery });
+        this._tracks = result.tracks;
+        this._trackServer = result.server_id;
+        this._message = this._tracks.length ? "Choose a song below. Save the alarm to keep it." : "No songs found. Add the song to this MA library, then search again.";
+      });
+      return;
+    }
+    if (action === "choose-track") {
+      const track = this._tracks[Number(button.dataset.trackIndex)];
+      if (track && this._draft) { this._draft.music_track = track.uri; this._draft.music_track_name = track.name; this._draft.music_server = this._trackServer; this._renderEditor(); }
+      return;
+    }
+    if (action.startsWith("music-")) { await this._musicOperation(action.slice(6)); return; }
     const id = button.closest("[data-id]")?.dataset.id;
     const alarm = this._data?.alarms.find((item) => item.id === id);
     if (action === "toggle") {
@@ -374,7 +400,10 @@ class HouseholdAlarmsCard extends HTMLElement {
     if (action === "retry") { this._connection = null; this._connect(); return; }
     if (action === "new") { this._edit(); return; }
     if (action === "edit") { this._edit(alarm); return; }
-    if (action === "cancel") { this._draft = null; this._voiceGeneration++; this._renderEditor(); return; }
+    if (action === "cancel") { this._draft = null; this._renderEditor(); return; }
+    if (action === "preview") { await this._openPreview(); return; }
+    if (action === "close-preview") { this._closePreview(); return; }
+    if (action === "play-preview") { await this._playPreview(); return; }
     await this._operation(async () => {
       if (action === "delete") {
         if (!window.confirm(`Delete ${alarm.name}?`)) return;
@@ -383,27 +412,85 @@ class HouseholdAlarmsCard extends HTMLElement {
         this._message = "Alarm deleted.";
       } else if (action === "test") {
         const speaker = this._hass.states[alarm.speaker]?.attributes.friendly_name || alarm.speaker;
-        if (!window.confirm(`Test this alarm on ${speaker} at ${alarm.start_volume}% volume? It will play the chosen sound${alarm.tts ? " and morning message" : ""} once.`)) return;
+        if (!window.confirm(alarm.music_enabled
+          ? `Test ${alarm.music_track_name || alarm.music_track} on ${speaker} at ${alarm.start_volume}% speaker volume and ${alarm.music_gain}% music gain? Voice delay is ${alarm.speech_delay} seconds. Music repeats until stopped, up to 30 minutes. Saved schedules and sleep switches stay unchanged.`
+          : `Test this alarm on ${speaker} at ${alarm.start_volume}% volume? It will play the chosen sound${alarm.assistant_id || alarm.briefing_enabled ? " and morning message" : ""} once.`)) return;
         await this._hass.callWS({ type: "household_alarms/test", alarm_id: id, confirmation: "PLAY", briefing: false });
         this._message = "Listen at the speaker. Did you hear the test?";
       } else if (["snooze", "dismiss", "sleep_in"].includes(action)) {
         if (action === "sleep_in" && !window.confirm(`Allow ${alarm.person || alarm.name} to sleep in?`)) return;
         await this._hass.callWS({ type: "household_alarms/action", alarm_id: id, action });
         await this._refresh();
-        this._message = "Alarm updated. Your sleep switch has not been changed.";
-      } else if (action === "preview") {
-        this._message = "Writing your morning message…";
-        this._showMessage();
-        const { text } = await this._hass.callWS({ type: "household_alarms/preview", config: clone(this._draft) });
-        this._preview = text;
-        this._message = "Here is your message. Nothing was played.";
+        this._message = action === "dismiss" ? "Alarm stopped. Check any warnings above." : "Alarm updated. Your sleep switch has not been changed.";
       }
     });
+  }
+
+  _closePreview() {
+    this._previewGeneration++;
+    const dialog = this.shadowRoot.querySelector("#preview-dialog");
+    const audio = dialog?.querySelector("audio");
+    if (audio) { audio.pause(); audio.removeAttribute("src"); audio.load(); }
+    if (this._previewUrl) { URL.revokeObjectURL(this._previewUrl); this._previewUrl = null; }
+    if (dialog) { dialog.close(); dialog.remove(); }
+    if (this._previewFocus?.isConnected) this._previewFocus.focus();
+    this._previewFocus = null;
+  }
+
+  async _openPreview() {
+    if (!this._draft) return;
+    const config = clone(this._draft);
+    this._closePreview();
+    const generation = this._previewGeneration;
+    this._previewFocus = this.shadowRoot.activeElement;
+    const dialog = document.createElement("dialog");
+    dialog.id = "preview-dialog";
+    dialog.setAttribute("aria-labelledby", "preview-title");
+    dialog.innerHTML = '<header><h3 id="preview-title">Morning message preview</h3><button type="button" data-action="close-preview" aria-label="Close preview">Close</button></header><p id="preview-status" role="status" aria-live="polite">Writing and preparing your message…</p><p class="preview-text"></p><audio controls hidden></audio><button type="button" data-action="play-preview" hidden>Play</button>';
+    dialog.addEventListener("cancel", (event) => { event.preventDefault(); this._closePreview(); });
+    this.shadowRoot.append(dialog);
+    dialog.showModal();
+    try {
+      const result = await this._hass.callWS({ type: "household_alarms/preview", config });
+      if (generation !== this._previewGeneration || !dialog.isConnected) return;
+      dialog.querySelector(".preview-text").textContent = result.text || "";
+      if (result.error) throw new Error(result.error);
+      if (!["audio/mpeg", "audio/wav", "audio/ogg", "audio/flac"].includes(result.mime_type) || !result.audio) throw new Error("No playable audio was returned. Check the assistant's voice settings and try again.");
+      const bytes = Uint8Array.from(atob(result.audio), (char) => char.charCodeAt(0));
+      this._previewUrl = URL.createObjectURL(new Blob([bytes], { type: result.mime_type }));
+      const audio = dialog.querySelector("audio");
+      audio.src = this._previewUrl;
+      audio.hidden = false;
+      audio.addEventListener("error", () => {
+        if (generation === this._previewGeneration) this._previewStatus("The audio could not play on this device. Check its audio settings or try another assistant voice.", true);
+      });
+      dialog.querySelector('[data-action="play-preview"]').hidden = false;
+      await this._playPreview();
+    } catch (error) {
+      if (generation === this._previewGeneration) this._previewStatus(error.message || "Preview failed. Check the assistant's conversation and voice settings, then try again.", true);
+    }
+  }
+
+  _previewStatus(text, error = false) {
+    const status = this.shadowRoot.querySelector("#preview-status");
+    if (status) { status.textContent = text; status.className = error ? "error" : ""; }
+  }
+
+  async _playPreview() {
+    const audio = this.shadowRoot.querySelector("#preview-dialog audio");
+    if (!audio?.src) return;
+    const generation = this._previewGeneration;
+    try {
+      await audio.play();
+      if (generation === this._previewGeneration) this._previewStatus("Playing on this device. Use the controls to pause or replay.");
+    } catch (error) {
+      if (generation === this._previewGeneration) this._previewStatus(error.name === "NotAllowedError" ? "Autoplay was blocked. Press Play to hear your message." : "The audio could not play. Check this device's audio settings or try another assistant voice.", error.name !== "NotAllowedError");
+    }
   }
 }
 
 if (!customElements.get("household-alarms-card")) customElements.define("household-alarms-card", HouseholdAlarmsCard);
 window.customCards = window.customCards || [];
 if (!window.customCards.some((card) => card.type === "household-alarms-card")) window.customCards.push({
-  type: "household-alarms-card", name: "HA-AlarmClock", description: "Create and manage speaker alarms with snooze, deadlines, Piper and Assist briefings.",
+  type: "household-alarms-card", name: "HA-AlarmClock", description: "Create and manage speaker alarms with snooze, deadlines and Assist voices.",
 });

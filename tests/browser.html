@@ -2,21 +2,38 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HA-AlarmClock offline browser fixture</title>
 <style>body{background:#111;color:#eee;font:15px system-ui;margin:16px;--primary-text-color:#eee;--secondary-text-color:#aaa;--primary-color:#7897ff;--secondary-background-color:#242424;--card-background-color:#191919;--divider-color:#444;max-width:800px}#results{white-space:pre-wrap}</style>
-<script src="file:///homeassistant/custom_components/household_alarms/frontend/household-alarms-card.js"></script></head><body>
+<script src="../custom_components/household_alarms/frontend/household-alarms-card.js"></script></head><body>
 <div id="app"></div><pre id="results">RUNNING</pre><script>
 (async () => {
+  if (new URLSearchParams(location.search).has('review')) Element.prototype.scrollIntoView = function () {};
   const results = [];
   const test = (name, condition) => { if (!condition) throw new Error(name); results.push(name); };
   const flush = async () => { for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0)); };
   const deep = (v) => JSON.parse(JSON.stringify(v));
   const calls = [], confirms = [];
+  const mediaCalls = [], revokedUrls = [];
+  let playbackError = null, previewError = null, previewGate = null;
+  HTMLMediaElement.prototype.play = function () { mediaCalls.push(['play',this.src]); return playbackError ? Promise.reject(playbackError) : Promise.resolve(); };
+  HTMLMediaElement.prototype.pause = function () { mediaCalls.push(['pause',this.src]); };
+  HTMLMediaElement.prototype.load = function () {};
+  const originalRevoke = URL.revokeObjectURL.bind(URL);
+  URL.revokeObjectURL = (url) => { revokedUrls.push(url); originalRevoke(url); };
+  const wav = new Uint8Array(60), wavView = new DataView(wav.buffer);
+  const chars = (offset,text) => [...text].forEach((char,index) => { wav[offset+index]=char.charCodeAt(0); });
+  chars(0,'RIFF'); wavView.setUint32(4,52,true); chars(8,'WAVEfmt '); wavView.setUint32(16,16,true);
+  wavView.setUint16(20,1,true); wavView.setUint16(22,1,true); wavView.setUint32(24,8000,true);
+  wavView.setUint32(28,16000,true); wavView.setUint16(32,2,true); wavView.setUint16(34,16,true);
+  chars(36,'data'); wavView.setUint32(40,16,true);
+  let previewResult = {text:'Good morning, sir. The temperature is 10 degrees.',audio:btoa(String.fromCharCode(...wav)),mime_type:'audio/wav'};
   let confirmation = true, subscriber, nextId = 1;
   window.confirm = (text) => { confirms.push(text); return confirmation; };
   window.attacked = false;
-  const defaults = { name: "New alarm", person: "", enabled: false, time: "07:00", mode: "weekdays", weekdays: [0,1,2,3,4], date: "", calendar: "", speaker: "", tone: "chime", start_volume:20, max_volume:60, volume_step:10, repeat_seconds:60, snooze_enabled:true, snooze_minutes:5, max_snoozes:3, deadline:"", allow_sleep_in:false, notify_enabled:true, notify_service:"", bedtime_entity:"", briefing_enabled:false, agent:"", instructions:"Be brief and use supplied facts.", weather:"", tts:"", language:"", voice:"" };
+  const defaults = { name: "New alarm", person: "", enabled: false, time: "07:00", mode: "weekdays", weekdays: [0,1,2,3,4], date: "", calendar: "", calendar_rule:'block',calendar_filters:'', speaker: "", tone: "chime", start_volume:20, max_volume:60, volume_step:10, repeat_seconds:60, snooze_enabled:true, snooze_minutes:5, max_snoozes:3, deadline:"", allow_sleep_in:false, notify_enabled:true, notify_service:"", bedtime_entity:"", briefing_enabled:false, assistant_id:"", instructions:"Be brief and use supplied facts.", weather:"" };
   defaults.schedule_enabled=false; defaults.schedule_calendars=[];
   defaults.briefing_words=100; defaults.schedule_include=''; defaults.schedule_exclude='';
-  const data = {revision:0, alarms:[], defaults, warnings:[], notify_services:["notify.adults"], test_results:{}};
+  defaults.clear_sleep_on_dismiss=false;
+  Object.assign(defaults,{music_enabled:false,music_track:'',music_track_name:'',music_server:'',music_gain:25,speech_delay:0});
+  const data = {revision:0, alarms:[], defaults, assistants:[{id:'pipeline-jarvis',name:'JARVIS morning voice'}], warnings:[], notify_services:["notify.adults"], test_results:{}};
   const push = () => subscriber?.(deep(data));
   const states = Object.fromEntries([
     ["media_player.bedroom_speaker","Bedroom Speaker"], ["media_player.lottie_s_speaker","Lottie's Speaker"],
@@ -26,8 +43,6 @@
   const hass = {states, connection:{subscribeMessage:async (handler) => { subscriber=handler; queueMicrotask(push); return () => {subscriber=null;}; }}, callWS:async (message) => {
     calls.push(deep(message));
     if (message.type === "household_alarms/list") return deep(data);
-    if (message.type === "tts/engine/get") return {provider:{supported_languages:["en_GB","en_US"]}};
-    if (message.type === "tts/engine/voices") return {voices:[{voice_id:"en_GB-alan-medium",name:"Alan"}]};
     if (message.type === "household_alarms/save") {
       if (message.expected_revision !== data.revision) throw new Error("Settings changed elsewhere. Reload before saving.");
       const alarm = {...deep(message.config),id:message.alarm_id || `alarm-${nextId++}`,run:null,next:null};
@@ -36,8 +51,28 @@
       data.revision++; push(); return {alarm_id:alarm.id,revision:data.revision};
     }
     if (message.type === "household_alarms/delete") { data.alarms=data.alarms.filter((a) => a.id !== message.alarm_id); data.revision++; push(); return {}; }
-    if (message.type === "household_alarms/preview") return {text:"Good morning, sir. The temperature is 10 degrees."};
-    if (message.type === "household_alarms/test") return {status:"accepted"};
+    if (message.type === "household_alarms/preview") {
+      if (previewGate) await previewGate;
+      if (previewError) throw previewError;
+      return deep(previewResult);
+    }
+    if (message.type === "household_alarms/tracks") return {server_id:'ma-server',tracks:[{uri:'library://track/42',name:'Test <img src=x onerror="window.attacked=true"> song'}]};
+    if (message.type === "household_alarms/test") {
+      if (data.alarms.find((a) => a.id===message.alarm_id)?.music_enabled) {
+        data.music_test={id:'music-session-1',status:'preparing',track:'Test <img src=x onerror="window.attacked=true"> song',message:'Preparing the test…'};
+        push();
+      }
+      return {status:'accepted'};
+    }
+    if (message.type === "household_alarms/music_check") return {ready:true,reasons:[]};
+    if (message.type === "household_alarms/music_start") {
+      data.music_test={id:'music-session-1',status:'preparing',track:'Test <img src=x onerror="window.attacked=true"> song',
+        message:'Preparing the test…',speaker:message.speaker}; push(); return deep(data.music_test);
+    }
+    if (message.type === "household_alarms/music_action") {
+      data.music_test.status={snooze:'snoozed',dismiss:'dismissed',sleep_in:'sleeping_in'}[message.action];
+      data.music_test.message='Music test updated. Saved alarms were not changed.'; push(); return deep(data.music_test);
+    }
     if (message.type === "household_alarms/action") return {};
     throw new Error("Unexpected command " + message.type);
   }};
@@ -55,10 +90,11 @@
   try {
     await flush();
     test("empty list renders", q("#list").textContent.includes("No alarms yet"));
+    test('experimental panel removed and card load never plays', !q('[data-music-field="enabled"]') && !q('[data-action="music-start"]') && !calls.some((c) => c.type==='household_alarms/music_start'));
     await click("new");
     test("new alarms start off with one switch", !card._draft.enabled && q('#editor .power').getAttribute('aria-checked') === 'false');
     test("duplicate enable checkbox was removed", !q('[data-field="enabled"]'));
-    test("generic form has no preset family or assistant", !q('#people option') && !card._draft.agent && !card._draft.weather && !card._draft.tts);
+    test("generic form has no preset family or assistant", !q('#people option') && !card._draft.assistant_id && !card._draft.weather);
     test("advanced options start collapsed", !q('[data-section="more"]').open);
     test("speaker selection is explicit", card._draft.speaker === "");
     await set("speaker","media_player.lottie_s_speaker");
@@ -76,13 +112,16 @@
     test("calendar allow choice asks for a phrase", q('[data-field="calendar_filters"]').required);
     await set('calendar_rule','block');
     q('[data-section="more"] summary').click(); await flush();
-    await set('tts','tts.piper');
-    test("provider language list loads", [...q('[data-field="language"]').options].some((o) => o.value === "en_GB"));
-    await set("language","en_GB");
-    test("installed Piper voices load", [...q('[data-field="voice"]').options].some((o) => o.value === "en_GB-alan-medium"));
-    await set("voice","en_GB-alan-medium");
-    test('more settings stays open after choosing a voice', q('[data-section="more"]').open);
-    await set('agent','conversation.jarvis');
+    test('sleep dismissal option is hidden without a switch', !q('[data-field="clear_sleep_on_dismiss"]'));
+    await set('bedtime_entity','input_boolean.charlottes_bedtime');
+    test('sleep dismissal is opt-in', !q('[data-field="clear_sleep_on_dismiss"]').checked);
+    await set('clear_sleep_on_dismiss',true);
+    await set('bedtime_entity','');
+    test('unlinking sleep switch clears and hides dismissal option', !card._draft.clear_sleep_on_dismiss && !q('[data-field="clear_sleep_on_dismiss"]'));
+    test('assistant picker lists named pipelines, not conversation entities', [...q('[data-field="assistant_id"]').options].some((o) => o.value==='pipeline-jarvis' && o.textContent==='JARVIS morning voice') && ![...q('[data-field="assistant_id"]').options].some((o) => o.value==='conversation.jarvis'));
+    test('manual voice controls are retired', !q('[data-field="tts"]') && !q('[data-field="language"]') && !q('[data-field="voice"]') && !q('[data-field="agent"]'));
+    await set('assistant_id','pipeline-jarvis');
+    test('more settings stays open after choosing assistant', q('[data-section="more"]').open);
     await set('weather','weather.home_weather');
     await set("briefing_enabled",true);
     test('schedule is off until explicitly chosen', !q('[data-field="schedule_enabled"]').checked && !q('[data-schedule-calendar]'));
@@ -104,10 +143,44 @@
     const focus=q('[data-field="name"]'); focus.focus(); const typed=focus.value;
     push(); await flush();
     test("runtime updates preserve editor and focus", q('[data-field="name"]') === focus && focus.value === typed);
-    await click("preview");
-    test("briefing preview renders without audio request", q("#preview").textContent.includes("Good morning") && !calls.some((c) => c.type === "household_alarms/test"));
+    await set('speaker','');
+    let resolvePreview;
+    previewGate = new Promise((resolve) => {resolvePreview=resolve;});
+    await click('preview');
+    test('preview opens a loading popup before speaker selection', q('#preview-dialog').open && q('#preview-status').textContent.includes('preparing'));
+    resolvePreview(); previewGate=null; await flush();
+    test('unsaved preview sends draft and no speaker commands', calls.findLast((c) => c.type==='household_alarms/preview').config.speaker==='' && !calls.some((c) => ['household_alarms/test','household_alarms/save','household_alarms/action'].includes(c.type)));
+    test('preview displays text and plays private audio on dashboard device', q('#preview-dialog .preview-text').textContent.includes('Good morning') && q('#preview-dialog audio').src.startsWith('blob:') && mediaCalls.some(([action]) => action==='play'));
+    const playingAudio=q('#preview-dialog audio'); push(); await flush();
+    test('runtime updates preserve preview playback', q('#preview-dialog audio')===playingAudio);
+    await click('close-preview');
+    test('closing preview stops audio and revokes URL', !q('#preview-dialog') && mediaCalls.some(([action]) => action==='pause') && revokedUrls.length===1);
+    playbackError=new DOMException('blocked','NotAllowedError'); await click('preview');
+    test('blocked autoplay offers Play button', q('#preview-status').textContent.includes('Press Play') && !q('[data-action="play-preview"]').hidden);
+    playbackError=null; await click('play-preview');
+    test('Play retries local playback', q('#preview-status').textContent.includes('Playing on this device'));
+    await click('close-preview');
+    const normalPreview=deep(previewResult);
+    previewResult={text:'Generated message',error:'Check text-to-speech in Settings → Voice assistants.'};
+    await click('preview');
+    test('speech failure keeps text and actionable popup error', q('#preview-dialog .preview-text').textContent==='Generated message' && q('#preview-status').textContent.includes('Voice assistants') && q('#preview-dialog audio').hidden);
+    await click('close-preview'); previewResult=normalPreview;
+    previewError=new Error('Choose an assistant with a configured voice.'); await click('preview');
+    test('missing voice is reported inside popup', q('#preview-status').textContent.includes('configured voice'));
+    await click('close-preview'); previewError=null;
+    previewError=new Error('Check conversation provider settings.'); await click('preview');
+    test('generation failure is reported inside popup', q('#preview-status').textContent.includes('conversation provider'));
+    await click('close-preview'); previewError=null;
+    previewGate=new Promise((resolve) => {resolvePreview=resolve;}); await click('preview');
+    const playCount=mediaCalls.filter(([action]) => action==='play').length;
+    await click('close-preview'); resolvePreview(); previewGate=null; await flush();
+    test('closing a pending preview prevents late playback', !q('#preview-dialog') && mediaCalls.filter(([action]) => action==='play').length===playCount);
+    await click('preview');
+    q('#preview-dialog').dispatchEvent(new Event('cancel',{cancelable:true})); await flush();
+    test('Escape closes preview and stops playback', !q('#preview-dialog'));
+    await set('speaker','media_player.lottie_s_speaker');
     q("form").dispatchEvent(new Event("submit",{bubbles:true,cancelable:true})); await flush();
-    test("create saves selected speaker and voice", data.alarms[0].speaker === "media_player.lottie_s_speaker" && data.alarms[0].voice === "en_GB-alan-medium");
+    test("create saves selected speaker and assistant ID only", data.alarms[0].speaker === "media_player.lottie_s_speaker" && data.alarms[0].assistant_id==='pipeline-jarvis' && !['tts','voice','language','agent'].some((key) => key in data.alarms[0]));
     test("created alarm remains disabled", !data.alarms[0].enabled);
     test('schedule settings are saved per alarm', data.alarms[0].schedule_enabled && data.alarms[0].schedule_calendars.length===1);
     test('length and filters are saved per alarm', data.alarms[0].briefing_words===300 && data.alarms[0].schedule_include==='Work\nDentist' && data.alarms[0].schedule_exclude==='Cancelled');
@@ -152,6 +225,55 @@
     data.alarms[0].run=null; push(); await flush();
     await click("edit");
     test("mobile layout does not overflow", document.documentElement.scrollWidth <= window.innerWidth + 1);
+    test('existing alarm music remains disabled', !card._draft.music_enabled);
+    await set('music_enabled',true);
+    const songQuery=q('[data-track-query]'); songQuery.value='Test'; songQuery.dispatchEvent(new Event('input',{bubbles:true}));
+    await click('search-tracks');
+    test('search targets selected speaker and does not play', calls.findLast((c) => c.type==='household_alarms/tracks').speaker===card._draft.speaker && !calls.some((c) => c.type==='household_alarms/music_start'));
+    test('search metadata escaped', !q('#editor img') && !window.attacked);
+    await click('choose-track');
+    await set('music_gain',20); await set('speech_delay',12);
+    test('chosen song and delay live in alarm draft', card._draft.music_track==='library://track/42' && card._draft.speech_delay===12);
+    await set('speaker','media_player.bedroom_speaker');
+    test('changing MA server speaker clears local song identity', !card._draft.music_track);
+    await set('speaker','media_player.lottie_s_speaker');
+    await click('search-tracks'); await click('choose-track');
+    await card._save(); await flush();
+    test('song gain and delay persisted together', data.alarms[0].music_track==='library://track/42' && data.alarms[0].music_gain===20 && data.alarms[0].speech_delay===12);
+    const alarmsBeforeMusic=JSON.stringify(data.alarms), revisionBeforeMusic=data.revision;
+    const priorTests=calls.filter((c) => c.type==='household_alarms/test').length;
+    confirmation=false; await click('test');
+    test('cancelled music confirmation sends no playback request', calls.filter((c) => c.type==='household_alarms/test').length===priorTests);
+    confirmation=true; await click('test');
+    test('music confirmation names volume gain delay and timeout', confirms.some((t) => t.includes("Lottie's Speaker") && t.includes('20% music gain') && t.includes('12 seconds') && t.includes('30 minutes')));
+    test('preparing test offers dismiss but no premature snooze', !!q('[data-action="music-dismiss"]') && q('[data-action="music-snooze"]').disabled);
+    test('test track metadata is escaped', !q('#music-test img') && !window.attacked);
+    data.music_test.status='playing'; push(); await flush();
+    test('playing test enables snooze', !q('[data-action="music-snooze"]').disabled);
+    await click('music-snooze');
+    test('music snooze targets only the test session', calls.findLast((c) => c.type==='household_alarms/music_action').session_id==='music-session-1' && calls.findLast((c) => c.type==='household_alarms/music_action').action==='snooze');
+    test('snoozed test cannot queue another snooze', q('[data-action="music-snooze"]').disabled);
+    await click('music-sleep_in');
+    test('test Sleep in leaves saved alarm schedule untouched', data.music_test.status==='sleeping_in' && JSON.stringify(data.alarms)===alarmsBeforeMusic && data.revision===revisionBeforeMusic);
+    await click('test'); data.music_test.status='uncertain'; push(); await flush();
+    test('uncertain playback exposes guarded dismiss not another start', !!q('[data-action="music-dismiss"]') && !q('[data-action="music-start"]'));
+    await click('music-dismiss');
+    test('guarded dismiss sends no ordinary alarm action', calls.findLast((c) => c.type==='household_alarms/music_action').action==='dismiss' && data.music_test.status==='dismissed');
+    test('music panel does not overflow on mobile', document.documentElement.scrollWidth <= window.innerWidth + 1);
+    if (new URLSearchParams(location.search).has('music')) {
+      card._draft=null; card._renderEditor(); card._openSections.add('music-test'); card._renderMusic();
+      q('#music-test').scrollIntoView();
+    }
+    if (new URLSearchParams(location.search).has('preview')) await click('preview');
+    if (new URLSearchParams(location.search).has('review')) {
+      card._draft=null; card._edit(data.alarms[0]);
+      card._draft.music_track_name='Example song — Example artist'; card._renderEditor();
+      q('[data-field="music_enabled"]').closest('fieldset').id='music-review';
+      const reviewStyle=document.createElement('style');
+      reviewStyle.textContent='#editor form > :not(#music-review){display:none}#music-test{display:none}';
+      card.shadowRoot.append(reviewStyle);
+      window.scrollTo(0,0);
+    }
     document.querySelector("#results").textContent=JSON.stringify({status:"PASS",count:results.length,tests:results});
   } catch (error) {
     document.querySelector("#results").textContent=JSON.stringify({status:"FAIL",count:results.length,error:error.stack,tests:results});

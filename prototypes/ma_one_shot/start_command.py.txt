@@ -1,0 +1,43 @@
+    @api_command("player_queues/play_index_with_briefing", required_scope=Scope.QUEUES_CONTROL)
+    @handle_play_action
+    async def play_index_with_briefing(
+        self,
+        queue_id: str,
+        queue_item_id: str,
+        run_id: str,
+        message: str,
+        tts_engine: str,
+        language: str | None = None,
+        voice: str | None = None,
+        music_gain: float = 0.25,
+        speech_gain: float = 0.7,
+    ) -> None:
+        """Start an existing queued song with one private, engine-rendered briefing."""
+        self._check_player_permission(queue_id)
+        player = self.mass.players.get_player(queue_id)
+        if player is None:
+            raise PlayerUnavailableError("Briefing player is unavailable")
+        if (
+            player.state.type == PlayerType.GROUP
+            or player.state.active_group
+            or player.state.synced_to
+            or len(player.state.group_members or ()) > 1
+        ):
+            raise InvalidDataError("Briefing prototype only supports a single ungrouped player")
+        item = self.get_item(queue_id, queue_item_id)
+        if item is None or item.media_type != MediaType.TRACK:
+            raise InvalidDataError("Briefing requires an existing queued track")
+        mixer = self.mass.streams.audio.briefings
+        if mixer.has_run(queue_id, run_id):
+            raise InvalidDataError("This briefing run was already attempted")
+        prepared = await prepare_briefing(
+            self.mass, run_id, message, tts_engine, language, voice,
+            levels=MixLevels(music_gain, speech_gain),
+        )
+        try:
+            await self._play_index(queue_id, queue_item_id, 0, False, briefing=prepared)
+        except BaseException:
+            mixer.cancel(queue_id, run_id)
+            raise
+        finally:
+            prepared.source = ""

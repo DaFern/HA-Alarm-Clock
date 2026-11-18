@@ -1,0 +1,18 @@
+{
+  "repository": "https://github.com/music-assistant/server",
+  "version": "2.10.12",
+  "commit": "6ab5bfa63f02d0daa237d342097a42feae5c5aae",
+  "sha256": {
+    "music_assistant/controllers/player_queues/queue_loader.py": "ba3f928d681eb9543b4efda8194daab4a41648fe07038d70172a845a8f4d271e",
+    "music_assistant/models/plugin.py": "e82996a1e66d2aa6955360b2e8718845f283845cb8b34040a61cd2effb540f40",
+    "music_assistant/providers/hass/__init__.py": "6c4050590facd12c7d690bbd38e577a60030b920e032600ca6081ceb52891893",
+    "music_assistant/helpers/plugin_engines.py": "af400226a7d73feefd2780ebeea13dd410006ca6acad241153b20cd5a9822c8a",
+    "music_assistant/helpers/tts.py": "f8c587379d32616d02ec764030de2b82d83870d313a195523ad44d27defb867b",
+    "music_assistant/controllers/player_queues/helpers.py": "62dec275cb61873bc3062edfa3af16f8de491fac9c61cfea7b5144ffa4f953d9",
+    "music_assistant/helpers/ffmpeg.py": "1d1fc511fc75b3699bb7532da4b3441d745753d58beeff4ae43717898cddef36",
+    "music_assistant/helpers/dsp.py": "c2da6fea4025cd566998a1a8f83d84505ca2eca8e56179bd5b2467e7d037aae7",
+    "music_assistant/controllers/streams/audio.py": "2a056fd61119205e9907143cf005bd773d590e385dc97f4e56c230110662faba",
+    "music_assistant/controllers/streams/controller.py": "a4eb5410d0dc7b1f3b15afdbf631e497ca0d9b8a6fbdf85dd5c9b398017c3c64",
+    "music_assistant/controllers/player_queues/controller.py": "de3e3eb3349f6e038ff9dc3b1b4f8f05e96f648da6483afb2c9f1f87cf5a2e5b"
+  }
+}

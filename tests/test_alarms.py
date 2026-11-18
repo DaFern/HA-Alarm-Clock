@@ -1,6 +1,7 @@
 """Offline tests of rules and HA adapter contracts, using fakes, not a live HA Core."""
 
 import asyncio
+import base64
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 import importlib.util
@@ -9,11 +10,11 @@ import pathlib
 import sys
 import types
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 import wave
 from zoneinfo import ZoneInfo
 
-ROOT = pathlib.Path("/homeassistant/custom_components/household_alarms")
+ROOT = pathlib.Path(__file__).resolve().parents[1] / "custom_components" / "household_alarms"
 PACKAGE = "alarm_test_package"
 package = types.ModuleType(PACKAGE)
 package.__path__ = [str(ROOT)]
@@ -69,9 +70,14 @@ module("homeassistant.helpers")
 module("homeassistant.helpers.storage", Store=FakeStore)
 util = module("homeassistant.util")
 util.dt = module("homeassistant.util.dt", now=lambda: datetime.now(timezone.utc))
+module("homeassistant.components")
+pipeline_api = module("homeassistant.components.assist_pipeline", async_get_pipelines=lambda hass: hass.pipelines)
+tts_api = module("homeassistant.components.tts",
+    generate_media_source_id=Mock(return_value="media-source://tts/preview"),
+    async_get_media_source_audio=AsyncMock(return_value=("mp3", b"fake-mp3-audio")))
 manager_module = load("manager")
 AlarmManager = manager_module.AlarmManager
-module("homeassistant.components")
+assistants_module = load("assistants")
 frontend = module("homeassistant.components.frontend", add_extra_js_url=lambda *args: None)
 module("homeassistant.components.lovelace")
 module("homeassistant.components.lovelace.const", LOVELACE_DATA="lovelace")
@@ -80,7 +86,7 @@ resource_module = load("resources")
 
 def config(**overrides):
     return {**deepcopy(model.DEFAULTS), "name": "School wake-up", "person": "Charlotte",
-            "speaker": "media_player.lottie", "tts": "tts.piper", **overrides}
+            "speaker": "media_player.lottie", **overrides}
 
 
 def run_at(start, **overrides):
@@ -91,6 +97,14 @@ def run_at(start, **overrides):
 
 
 class RuleTests(unittest.TestCase):
+    def test_sleep_dismissal_defaults_off_and_requires_linked_switch(self):
+        self.assertFalse(model.validate(config())["clear_sleep_on_dismiss"])
+        self.assertFalse(model.validate(config(clear_sleep_on_dismiss=True))["clear_sleep_on_dismiss"])
+        self.assertTrue(model.validate(config(clear_sleep_on_dismiss=True,
+            bedtime_entity="input_boolean.bedtime"))["clear_sleep_on_dismiss"])
+        with self.assertRaises(model.AlarmError):
+            model.validate(config(clear_sleep_on_dismiss="true"))
+
     def test_new_alarm_disabled(self):
         self.assertFalse(model.validate(config())["enabled"])
 
@@ -137,7 +151,7 @@ class RuleTests(unittest.TestCase):
 
     def test_validation_rejects_untrusted_runtime(self):
         for settings in ({"status": "dismissed"}, {"max_snoozes": True},
-                         {"time": "25:00"}, {"mode": []}, {"voice": "test"},
+                         {"time": "25:00"}, {"mode": []}, {"assistant_id": []},
                          {"speaker": "script.anything"}, {"max_volume": 10},
                          {"weekdays": [True]}, {"name": ""}, {"repeat_seconds": 0}):
             with self.subTest(settings=settings), self.assertRaises(model.AlarmError):
@@ -150,12 +164,14 @@ class RuleTests(unittest.TestCase):
     def test_a_home_without_tts_can_use_an_alarm_sound(self):
         alarm = model.validate(config(tts=""))
         self.assertEqual(alarm["tone"], "chime")
-        self.assertEqual(alarm["tts"], "")
+        self.assertEqual(alarm["assistant_id"], "")
+        self.assertNotIn("tts", alarm)
 
-    def test_voice_only_or_ai_message_needs_a_voice_service(self):
+    def test_missing_assistant_does_not_prevent_saving_migrated_alarms(self):
         for fields in ({"tone": "none"}, {"briefing_enabled": True, "agent": "conversation.example"}):
-            with self.assertRaises(model.AlarmError):
-                model.validate(config(tts="", **fields))
+            alarm = model.validate(config(tts="", **fields))
+            self.assertEqual(alarm["assistant_id"], "")
+            self.assertNotIn("agent", alarm)
 
     def test_no_school_sleep_in_or_missing_deadline(self):
         for overrides in ({"allow_sleep_in": True, "deadline": "07:30"}, {"deadline": ""}):
@@ -288,6 +304,9 @@ class FakeHass:
         self.services = FakeServices()
         self.bus = types.SimpleNamespace(async_fire=lambda *args: None)
         self.data = {}
+        self.pipelines = [types.SimpleNamespace(id="assistant-test", name="Morning assistant",
+            conversation_engine="conversation.jarvis", conversation_language="en-GB", language="en-GB",
+            tts_engine="tts.piper", tts_language="en_GB", tts_voice="en_GB-alan-medium")]
 
     def async_create_background_task(self, coroutine, name):
         return asyncio.create_task(coroutine, name=name)
@@ -338,6 +357,9 @@ class ResourceTests(unittest.IsolatedAsyncioTestCase):
 
 class AdapterTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        tts_api.generate_media_source_id.reset_mock(side_effect=True)
+        tts_api.async_get_media_source_audio.reset_mock(side_effect=True)
+        tts_api.async_get_media_source_audio.return_value = ("mp3", b"fake-mp3-audio")
         self.hass = FakeHass()
         self.manager = AlarmManager(self.hass)
         self.now = datetime(2026, 11, 9, 7, tzinfo=timezone.utc)
@@ -357,6 +379,403 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
     async def settle(self):
         await asyncio.gather(*list(self.manager.tasks.values()), *list(self.manager.alert_tasks.values()), return_exceptions=True)
         await asyncio.sleep(0)
+
+    async def fast_delivery(self, alarm_id, **kwargs):
+        real_sleep = asyncio.sleep
+        async def fast_sleep(_seconds):
+            await real_sleep(0)
+        with patch.object(manager_module.asyncio, "sleep", fast_sleep):
+            await self.manager._deliver(alarm_id, **kwargs)
+
+    async def test_legacy_voice_settings_retire_without_changing_schedule_or_speaker(self):
+        alarm_id = await self.create()
+        legacy = deepcopy(self.manager.store.data)
+        old_alarm = legacy["alarms"][0]
+        old_alarm.pop("assistant_id")
+        old_alarm.update(tts="tts.old", voice="old-voice", language="en", agent="conversation.old",
+                         briefing_enabled=True, mode="once", date="2026-11-09")
+        other = AlarmManager(self.hass)
+        other.store.data = deepcopy(legacy)
+        await other.async_load()
+        alarm = other.alarms[alarm_id]
+        self.assertEqual(alarm["assistant_id"], "")
+        self.assertFalse(model.RETIRED_PLAYBACK_FIELDS & alarm.keys())
+        for key in ("speaker", "time", "weekdays", "mode", "date", "enabled"):
+            self.assertEqual(alarm[key], old_alarm[key])
+        self.assertIn("Choose an assistant", other.snapshot()["alarms"][0]["assistant_warning"])
+        self.assertEqual(other.store.data, legacy)  # Reading does not rewrite storage.
+
+    async def test_snapshot_lists_named_assistants_and_flags_deleted_selection(self):
+        alarm_id = await self.create(assistant_id="deleted")
+        snapshot = self.manager.snapshot()
+        self.assertEqual(snapshot["assistants"], [{"id": "assistant-test", "name": "Morning assistant"}])
+        self.assertIn("no longer available", snapshot["alarms"][0]["assistant_warning"])
+        self.assertEqual(self.manager.alarms[alarm_id]["assistant_id"], "deleted")
+        with self.assertRaises(model.AlarmError):
+            assistants_module.resolve_assistant(self.hass, "conversation.jarvis")
+
+    async def test_assistant_selection_and_voice_resolve_current_pipeline_settings(self):
+        alarm_id = await self.create(assistant_id="assistant-test", briefing_enabled=True,
+                                     tts="tts.ignored", voice="ignored", agent="conversation.ignored")
+        pipeline = self.hass.pipelines[0]
+        pipeline.conversation_engine = "conversation.updated"
+        pipeline.conversation_language = "fr"
+        pipeline.tts_engine = "tts.updated"
+        pipeline.tts_language = "fr_FR"
+        pipeline.tts_voice = "configured-voice"
+        alarm = self.manager.alarms[alarm_id]
+        text = await self.manager.async_briefing(alarm)
+        await self.manager._speak(alarm, text)
+        conversation = self.hass.services.calls[0][2]
+        speech = self.hass.services.calls[1][2]
+        self.assertEqual(conversation["agent_id"], "conversation.updated")
+        self.assertEqual(conversation["language"], "fr")
+        self.assertEqual(speech["entity_id"], "tts.updated")
+        self.assertEqual(speech["language"], "fr_FR")
+        self.assertEqual(speech["options"], {"voice": "configured-voice"})
+        self.assertEqual(speech["media_player_entity_id"], "media_player.lottie")
+        self.assertFalse(model.RETIRED_PLAYBACK_FIELDS & alarm.keys())
+
+    async def test_preview_uses_unsaved_draft_and_assistant_voice_without_speaker(self):
+        before = deepcopy(self.manager._data())
+        result = await self.manager.async_preview(config(speaker="", assistant_id="assistant-test",
+            briefing_enabled=True, instructions="A new unsaved style", bedtime_entity="input_boolean.sleep"))
+        self.assertIn("Good morning", result["text"])
+        self.assertEqual(base64.b64decode(result["audio"]), b"fake-mp3-audio")
+        self.assertEqual(result["mime_type"], "audio/mpeg")
+        args, kwargs = tts_api.generate_media_source_id.call_args
+        self.assertEqual(args[0], self.hass)
+        self.assertEqual(kwargs, {"engine": "tts.piper", "language": "en_GB",
+            "options": {"voice": "en_GB-alan-medium"}, "cache": False})
+        self.assertEqual([call[0] for call in self.hass.services.calls], ["conversation"])
+        self.assertIn("A new unsaved style", self.hass.services.calls[0][2]["text"])
+        self.assertEqual(self.manager._data(), before)
+        self.assertIsNone(self.manager.store.data)
+
+    async def test_preview_rejects_missing_deleted_and_voiceless_assistants(self):
+        for assistant_id, message in (("", "Choose an assistant"), ("deleted", "no longer available"),
+                                      ("assistant-test", "no configured voice")):
+            if assistant_id == "assistant-test":
+                self.hass.pipelines[0].tts_engine = None
+            with self.subTest(assistant_id=assistant_id), self.assertRaisesRegex(model.AlarmError, message):
+                await self.manager.async_preview(config(speaker="", assistant_id=assistant_id, briefing_enabled=True))
+        tts_api.generate_media_source_id.assert_not_called()
+        self.assertFalse(self.hass.services.calls)
+
+    async def test_preview_generation_failure_is_actionable_without_audio(self):
+        async def fail(*args):
+            raise HAError("Provider failed")
+        self.hass.services.handler = fail
+        with self.assertRaisesRegex(model.AlarmError, "conversation settings"):
+            await self.manager.async_preview(config(speaker="", assistant_id="assistant-test", briefing_enabled=True))
+        tts_api.generate_media_source_id.assert_not_called()
+        self.assertIsNone(self.manager.store.data)
+
+    async def test_preview_speech_failure_retains_generated_text(self):
+        tts_api.async_get_media_source_audio.side_effect = HAError("Voice unavailable")
+        result = await self.manager.async_preview(config(speaker="", assistant_id="assistant-test", briefing_enabled=True))
+        self.assertIn("Good morning", result["text"])
+        self.assertIn("text-to-speech settings", result["error"])
+        self.assertNotIn("audio", result)
+        self.assertIsNone(self.manager.store.data)
+
+    async def test_preview_rejects_empty_oversized_or_unsupported_audio(self):
+        for payload in (("mp3", b""), ("html", b"markup"), ("mp3", b"x" * (8 * 1024 * 1024 + 1))):
+            with self.subTest(extension=payload[0], size=len(payload[1])):
+                tts_api.async_get_media_source_audio.return_value = payload
+                result = await self.manager.async_preview(config(speaker="", assistant_id="assistant-test"))
+                self.assertIn("error", result)
+                self.assertNotIn("audio", result)
+
+    async def test_briefing_speaks_only_on_first_ring_and_repeats_use_tones(self):
+        alarm_id = await self.create(assistant_id="assistant-test", briefing_enabled=True, tone="none")
+        self.manager.runs[alarm_id] = run_at(self.now)
+        await self.fast_delivery(alarm_id)
+        self.assertTrue(self.manager.store.data["runs"][alarm_id]["briefing_attempted"])
+        await self.fast_delivery(alarm_id)
+        self.assertEqual(sum(c[:2] == ("conversation", "process") for c in self.hass.services.calls), 1)
+        self.assertEqual(sum(c[:2] == ("tts", "speak") for c in self.hass.services.calls), 1)
+        tones = [c[2]["media_content_id"] for c in self.hass.services.calls if c[:2] == ("media_player", "play_media")]
+        self.assertEqual(tones, ["media-source://household_alarms/chime"])
+
+    async def test_cancelled_first_ring_never_repeats_briefing_after_restart(self):
+        alarm_id = await self.create(assistant_id="assistant-test", briefing_enabled=True)
+        self.manager.runs[alarm_id] = run_at(self.now)
+        speaking = asyncio.Event()
+        async def long_speech(*args):
+            self.assertTrue(self.manager.store.data["runs"][alarm_id]["briefing_attempted"])
+            speaking.set()
+            await asyncio.Event().wait()
+        self.manager._speak = AsyncMock(side_effect=long_speech)
+        real_sleep = asyncio.sleep
+        async def fast_sleep(_seconds):
+            await real_sleep(0)
+        with patch.object(manager_module.asyncio, "sleep", fast_sleep):
+            self.manager._spawn(self.manager.tasks, alarm_id, self.manager._deliver(alarm_id))
+            await asyncio.wait_for(speaking.wait(), timeout=1)
+            await self.manager.async_action(alarm_id, "snooze")
+        other = AlarmManager(self.hass)
+        other.store.data = deepcopy(self.manager.store.data)
+        await other.async_load()
+        self.assertEqual(other.runs[alarm_id]["cycles"], 0)
+        other._speak = AsyncMock()
+        other._play_tone = AsyncMock()
+        await other._deliver(alarm_id)
+        other._speak.assert_not_called()
+        other._play_tone.assert_awaited_once()
+
+    async def test_deleted_assistant_and_migrated_voice_only_alarm_use_tone(self):
+        for assistant_id in ("", "deleted"):
+            with self.subTest(assistant_id=assistant_id):
+                alarm_id = await self.create(assistant_id=assistant_id, briefing_enabled=True, tone="none")
+                self.manager.runs[alarm_id] = run_at(self.now)
+                self.hass.services.calls.clear()
+                await self.fast_delivery(alarm_id)
+                self.assertFalse(any(c[0] in ("tts", "conversation") for c in self.hass.services.calls))
+                self.assertIn("media-source://household_alarms/chime",
+                    [c[2].get("media_content_id") for c in self.hass.services.calls])
+                self.assertIn(f"assistant:{alarm_id}", self.manager.warnings)
+
+    async def test_voice_only_speech_failure_plays_fallback_tone(self):
+        alarm_id = await self.create(assistant_id="assistant-test", briefing_enabled=True, tone="none")
+        self.manager.runs[alarm_id] = run_at(self.now)
+        async def handler(domain, service, data):
+            if domain == "tts":
+                raise HAError("Speech failed")
+            if domain == "conversation":
+                return {"response": {"speech": {"plain": {"speech": "Good morning"}}}}
+        self.hass.services.handler = handler
+        await self.fast_delivery(alarm_id)
+        self.assertIn("media-source://household_alarms/chime",
+            [c[2].get("media_content_id") for c in self.hass.services.calls])
+        self.assertIn("voice could not play", self.manager.warnings[f"assistant:{alarm_id}"])
+        self.assertEqual(self.manager.runs[alarm_id]["cycles"], 1)
+
+    async def test_missing_assistant_voice_uses_tone_without_generation(self):
+        alarm_id = await self.create(assistant_id="assistant-test", briefing_enabled=True, tone="none")
+        self.hass.pipelines[0].tts_engine = None
+        self.manager.runs[alarm_id] = run_at(self.now)
+        await self.fast_delivery(alarm_id)
+        self.assertIn("no configured voice", self.manager.warnings[f"assistant:{alarm_id}"])
+        self.assertFalse(any(c[0] in ("tts", "conversation") for c in self.hass.services.calls))
+        self.assertIn("media-source://household_alarms/chime",
+            [c[2].get("media_content_id") for c in self.hass.services.calls])
+
+    async def test_speech_attempt_save_failure_does_not_issue_playback(self):
+        alarm_id = await self.create(assistant_id="assistant-test", briefing_enabled=True)
+        self.manager.runs[alarm_id] = run_at(self.now)
+        self.manager.store.fail = True
+        with self.assertRaises(OSError):
+            await self.manager._deliver(alarm_id)
+        self.assertNotIn("briefing_attempted", self.manager.runs[alarm_id])
+        self.assertFalse(self.hass.services.calls)
+
+    async def test_preview_generation_and_speech_cancel_without_saving(self):
+        started = asyncio.Event()
+        async def blocked_audio(*args):
+            started.set()
+            await asyncio.Event().wait()
+        tts_api.async_get_media_source_audio.side_effect = blocked_audio
+        task = asyncio.create_task(self.manager.async_preview(config(speaker="", assistant_id="assistant-test")))
+        await asyncio.wait_for(started.wait(), timeout=1)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertIsNone(self.manager.store.data)
+        self.assertFalse(self.hass.services.calls)
+
+    async def test_legacy_pipeline_tts_engine_uses_media_source_not_entity_target(self):
+        self.hass.pipelines[0].tts_engine = "legacy_provider"
+        await self.manager._speak(config(assistant_id="assistant-test"), "Hello")
+        self.assertEqual(self.hass.services.calls[-1][:2], ("media_player", "play_media"))
+        self.assertEqual(tts_api.generate_media_source_id.call_args.kwargs["engine"], "legacy_provider")
+
+    async def test_sleep_skip_is_persisted_through_catchup_and_restart(self):
+        alarm_id = await self.create(enabled=True, bedtime_entity="input_boolean.bedtime")
+        self.hass.states.set("input_boolean.bedtime", "off")
+        self.manager._deliver = AsyncMock()
+        await self.manager._tick(self.now)
+        self.assertEqual(self.manager.runs[alarm_id]["status"], "missed")
+        self.assertTrue(self.manager.alarms[alarm_id]["enabled"])
+        self.hass.states.set("input_boolean.bedtime", "on")
+        other = AlarmManager(self.hass)
+        other.store.data = deepcopy(self.manager.store.data)
+        await other.async_load()
+        other._deliver = AsyncMock()
+        await other._tick(self.now + timedelta(minutes=1))
+        other._deliver.assert_not_called()
+        await other._tick(self.now + timedelta(days=1))
+        await asyncio.gather(*list(other.tasks.values()))
+        other._deliver.assert_awaited_once()
+
+    async def test_failed_sleep_skip_save_rolls_back_without_playback(self):
+        alarm_id = await self.create(enabled=True, bedtime_entity="input_boolean.bedtime")
+        self.hass.states.set("input_boolean.bedtime", "off")
+        self.manager._deliver = AsyncMock()
+        self.manager.store.fail = True
+        with self.assertRaises(OSError):
+            await self.manager._tick(self.now)
+        self.assertNotIn(alarm_id, self.manager.runs)
+        self.manager._deliver.assert_not_called()
+
+    async def test_unlinked_alarm_rings_and_dismisses(self):
+        alarm_id = await self.create(enabled=True)
+        self.manager._deliver = AsyncMock()
+        await self.manager._tick(self.now)
+        await self.settle()
+        self.manager._deliver.assert_awaited_once()
+        await self.manager.async_action(alarm_id, "dismiss")
+        self.assertEqual(self.manager.store.data["runs"][alarm_id]["status"], "dismissed")
+        self.assertFalse(any(domain == "input_boolean" for domain, *_ in self.hass.services.calls))
+
+    async def test_existing_saved_alarm_defaults_to_no_switch_change(self):
+        alarm_id = await self.create(bedtime_entity="input_boolean.bedtime")
+        saved = deepcopy(self.manager.store.data)
+        saved["alarms"][0].pop("clear_sleep_on_dismiss")
+        other = AlarmManager(self.hass)
+        other.store.data = saved
+        await other.async_load()
+        self.assertFalse(other.alarms[alarm_id]["clear_sleep_on_dismiss"])
+        self.assertEqual(other.alarms[alarm_id]["speaker"], "media_player.lottie")
+        self.assertEqual(other.alarms[alarm_id]["weekdays"], [0, 1, 2, 3, 4])
+
+    async def test_dismiss_cancels_delivery_before_clearing_switch(self):
+        alarm_id = await self.create(bedtime_entity="input_boolean.bedtime", clear_sleep_on_dismiss=True)
+        self.hass.states.set("input_boolean.bedtime", "on")
+        self.manager.runs[alarm_id] = run_at(self.now)
+        started, cancelled = asyncio.Event(), asyncio.Event()
+        async def delivery():
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+        self.manager._spawn(self.manager.tasks, alarm_id, delivery())
+        await started.wait()
+        async def turn_off(*args):
+            self.assertTrue(cancelled.is_set())
+        self.hass.services.handler = turn_off
+        await self.manager.async_action(alarm_id, "dismiss")
+        self.assertTrue(cancelled.is_set())
+        self.assertEqual(len(self.hass.services.calls), 1)
+
+    async def test_dismissal_switch_option_for_ringing_and_snoozed_runs(self):
+        for status in ("ringing", "snoozed"):
+            for enabled in (False, True):
+                with self.subTest(status=status, enabled=enabled):
+                    alarm_id = await self.create(bedtime_entity="input_boolean.bedtime",
+                                                clear_sleep_on_dismiss=enabled)
+                    self.hass.states.set("input_boolean.bedtime", "on")
+                    self.manager.runs[alarm_id] = run_at(self.now, status=status)
+                    self.hass.services.calls.clear()
+                    async def turn_off(domain, service, data):
+                        self.assertEqual(self.manager.store.data["runs"][alarm_id]["status"], "dismissed")
+                        self.assertEqual((domain, service, data),
+                            ("input_boolean", "turn_off", {"entity_id": "input_boolean.bedtime"}))
+                        self.hass.states.set(data["entity_id"], "off")
+                    self.hass.services.handler = turn_off
+                    await self.manager.async_action(alarm_id, "dismiss")
+                    self.assertEqual(len(self.hass.services.calls), int(enabled))
+                    self.assertEqual(self.hass.states.get("input_boolean.bedtime").state,
+                                     "off" if enabled else "on")
+
+    async def test_switch_failure_never_undoes_dismissal_or_repeats(self):
+        alarm_id = await self.create(enabled=True, bedtime_entity="input_boolean.bedtime",
+                                    clear_sleep_on_dismiss=True)
+        self.hass.states.set("input_boolean.bedtime", "on")
+        self.manager.runs[alarm_id] = run_at(self.now)
+        async def fail(*args):
+            raise HAError("Switch failed")
+        self.hass.services.handler = fail
+        await self.manager.async_action(alarm_id, "dismiss")
+        self.assertEqual(self.manager.store.data["runs"][alarm_id]["status"], "dismissed")
+        self.assertIn(f"sleep:{alarm_id}", self.manager.warnings)
+        self.manager._deliver = AsyncMock()
+        await self.manager._tick(self.now + timedelta(minutes=1))
+        self.manager._deliver.assert_not_called()
+
+    async def test_missing_or_unavailable_sleep_switch_warns_after_dismissal(self):
+        for state in (None, "unknown", "unavailable"):
+            with self.subTest(state=state):
+                alarm_id = await self.create(bedtime_entity="input_boolean.bedtime",
+                                            clear_sleep_on_dismiss=True)
+                if state is not None:
+                    self.hass.states.set("input_boolean.bedtime", state)
+                self.manager.runs[alarm_id] = run_at(self.now, status="snoozed")
+                await self.manager.async_action(alarm_id, "dismiss")
+                self.assertEqual(self.manager.store.data["runs"][alarm_id]["status"], "dismissed")
+                self.assertIn(f"sleep:{alarm_id}", self.manager.warnings)
+
+    async def test_failed_dismiss_save_never_changes_switch(self):
+        alarm_id = await self.create(bedtime_entity="input_boolean.bedtime", clear_sleep_on_dismiss=True)
+        self.hass.states.set("input_boolean.bedtime", "on")
+        self.manager.runs[alarm_id] = run_at(self.now)
+        self.manager.store.fail = True
+        with self.assertRaises(OSError):
+            await self.manager.async_action(alarm_id, "dismiss")
+        self.assertEqual(self.manager.runs[alarm_id]["status"], "ringing")
+        self.assertFalse(self.hass.services.calls)
+
+    async def test_snooze_and_sleep_in_never_clear_switch_even_when_opted_in(self):
+        for action in ("snooze", "sleep_in"):
+            with self.subTest(action=action):
+                alarm_id = await self.create(bedtime_entity="input_boolean.bedtime",
+                    clear_sleep_on_dismiss=True, allow_sleep_in=True, notify_enabled=False)
+                self.hass.states.set("input_boolean.bedtime", "on")
+                self.manager.runs[alarm_id] = run_at(self.now)
+                await self.manager.async_action(alarm_id, action)
+                self.assertFalse(self.hass.services.calls)
+                self.assertEqual(self.hass.states.get("input_boolean.bedtime").state, "on")
+
+    async def test_person_dismissal_uses_same_switch_option(self):
+        alarm_id = await self.create(bedtime_entity="input_boolean.bedtime", clear_sleep_on_dismiss=True)
+        self.hass.states.set("input_boolean.bedtime", "on")
+        self.manager.runs[alarm_id] = run_at(self.now, status="snoozed")
+        await self.manager.async_dismiss_person("Charlotte")
+        self.assertEqual(self.manager.store.data["runs"][alarm_id]["status"], "dismissed")
+        self.assertEqual(self.hass.services.calls[0][:3],
+            ("input_boolean", "turn_off", {"entity_id": "input_boolean.bedtime"}))
+
+    async def test_calendar_failure_is_distinct_from_no_match_for_both_rules(self):
+        for rule in ("block", "allow"):
+            with self.subTest(rule=rule):
+                alarm_id = await self.create(enabled=True, calendar="calendar.school",
+                    calendar_rule=rule, calendar_filters="Holiday")
+                self.manager._deliver = AsyncMock()
+                await self.manager._tick(self.now)
+                await self.settle()
+                self.assertEqual(self.manager.runs[alarm_id]["status"], "ringing")
+                self.assertIn(f"calendar:{alarm_id}", self.manager.warnings)
+                self.manager._deliver.assert_awaited_once()
+                self.assertIsNone(await self.manager._calendar_matches(self.manager.alarms[alarm_id], self.now))
+
+    async def test_calendar_service_failure_and_recovery_update_visible_warnings(self):
+        alarm_id = await self.create(enabled=True, calendar="calendar.school",
+            calendar_rule="allow", calendar_filters="Holiday", weekdays=[1])
+        self.hass.states.set("calendar.school", "on")
+        # A warning must reach subscribers even when today is not a selected day.
+        self.manager.changed = changed = Mock()
+        async def fail(*args):
+            raise HAError("Calendar failed")
+        self.hass.services.handler = fail
+        await self.manager._tick(self.now)
+        changed.assert_called_once()
+        self.assertNotIn(alarm_id, self.manager.runs)
+        self.assertIn(f"calendar:{alarm_id}", self.manager.warnings)
+        self.hass.services.handler = None
+        later = self.now + timedelta(minutes=6)
+        self.assertIs(await self.manager._calendar_matches(self.manager.alarms[alarm_id], later), False)
+        self.assertNotIn(f"calendar:{alarm_id}", self.manager.warnings)
+
+    async def test_calendar_successful_empty_allow_rule_still_skips(self):
+        alarm_id = await self.create(enabled=True, calendar="calendar.school",
+            calendar_rule="allow", calendar_filters="Holiday")
+        self.hass.states.set("calendar.school", "on")
+        self.manager._deliver = AsyncMock()
+        await self.manager._tick(self.now)
+        self.manager._deliver.assert_not_called()
+        self.assertNotIn(alarm_id, self.manager.runs)
+        self.assertNotIn(f"calendar:{alarm_id}", self.manager.warnings)
 
     async def test_settings_roundtrip(self):
         alarm_id = await self.create()
@@ -590,7 +1009,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.hass.services.calls)
 
     async def test_no_new_briefing_after_deadline(self):
-        alarm_id = await self.create(briefing_enabled=True, agent="conversation.jarvis")
+        alarm_id = await self.create(briefing_enabled=True, assistant_id="assistant-test")
         self.manager.runs[alarm_id] = run_at(self.now, escalated=True)
         real_sleep = asyncio.sleep
         async def fast_sleep(_seconds):
@@ -601,7 +1020,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.hass.services.calls[0][2]["volume_level"], .6)
 
     async def test_briefing_uses_facts_fresh_context_and_no_audio(self):
-        alarm_id = await self.create(briefing_enabled=True, agent="conversation.jarvis", weather="weather.home")
+        alarm_id = await self.create(briefing_enabled=True, assistant_id="assistant-test", weather="weather.home")
         self.hass.states.set("weather.home", "sunny", temperature=10, temperature_unit="°C")
         text = await self.manager.async_briefing(self.manager.alarms[alarm_id])
         self.assertIn("Good morning", text)
@@ -610,7 +1029,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("conversation_id", self.hass.services.calls[0][2])
 
     async def test_piper_voice_is_passed_separately_from_speaker(self):
-        alarm = model.validate(config(language="en_GB", voice="en_GB-alan-medium"))
+        alarm = model.validate(config(assistant_id="assistant-test"))
         await self.manager._speak(alarm, "Good morning")
         domain, service, data, _ = self.hass.services.calls[-1]
         self.assertEqual((domain, service), ("tts", "speak"))
@@ -649,7 +1068,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
                     for title in ['Dan meeting', 'Dan cancelled private event', 'Meg private event']]}}
             return {'response': {'speech': {'plain': {'speech': 'Your meeting is at ten.'}}}}
         self.hass.services.handler = handler
-        alarm = config(briefing_enabled=True, agent='conversation.jarvis', schedule_enabled=True,
+        alarm = config(briefing_enabled=True, assistant_id='assistant-test', schedule_enabled=True,
             schedule_calendars=['calendar.personal'], schedule_include='dan', schedule_exclude='cancelled')
         await self.manager.async_briefing(alarm)
         prompt = next(c[2]['text'] for c in self.hass.services.calls if c[0] == 'conversation')
@@ -662,7 +1081,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
             return {'response': {'speech': {'plain': {'speech': 'word ' * 400}}}}
         self.hass.services.handler = handler
         for words in (100, 200, 300):
-            text = await self.manager.async_briefing(config(briefing_enabled=True, agent='conversation.jarvis', briefing_words=words))
+            text = await self.manager.async_briefing(config(briefing_enabled=True, assistant_id='assistant-test', briefing_words=words))
             self.assertEqual(len(text.split()), words)
             prompt = self.hass.services.calls[-1][2]['text']
             self.assertIn(f'at most {90 if words == 100 else words} words', prompt)
@@ -699,7 +1118,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
                 return {'calendar.personal': {'events': [{'summary':'Dentist', 'start':'2026-11-09T10:00:00Z', 'end':'2026-11-09T11:00:00Z'}]}}
             return {'response': {'speech': {'plain': {'speech': 'Dentist at ten.'}}}}
         self.hass.services.handler = handler
-        alarm = config(briefing_enabled=True, agent='conversation.jarvis', schedule_enabled=True, schedule_calendars=['calendar.personal'])
+        alarm = config(briefing_enabled=True, assistant_id='assistant-test', schedule_enabled=True, schedule_calendars=['calendar.personal'])
         await self.manager.async_briefing(alarm)
         prompt = next(c[2]['text'] for c in self.hass.services.calls if c[0] == 'conversation')
         self.assertIn('Dentist', prompt)
@@ -716,7 +1135,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(("notify", "adults"), [(c[0], c[1]) for c in self.hass.services.calls])
 
     async def test_ai_failure_still_rings_and_speaks_fallback(self):
-        alarm_id = await self.create(briefing_enabled=True, agent="conversation.jarvis")
+        alarm_id = await self.create(briefing_enabled=True, assistant_id="assistant-test")
         self.manager.runs[alarm_id] = run_at(self.now)
         async def handler(domain, service, data):
             if domain == "conversation":
@@ -742,7 +1161,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.manager.runs)
 
     async def test_full_test_plays_sound_then_generated_message_without_alarm_side_effects(self):
-        alarm_id = await self.create(briefing_enabled=True, agent="conversation.jarvis", notify_service="notify.adults")
+        alarm_id = await self.create(briefing_enabled=True, assistant_id="assistant-test", notify_service="notify.adults")
         before = deepcopy(self.manager._data())
         real_sleep = asyncio.sleep
         async def fast_sleep(_seconds):

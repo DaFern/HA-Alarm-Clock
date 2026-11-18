@@ -1,12 +1,12 @@
 {
   "domain": "household_alarms",
   "name": "HA-AlarmClock",
-  "version": "0.4.1",
+  "version": "0.7.0b1",
   "config_flow": true,
   "documentation": "https://developers.home-assistant.io/docs/creating_integration_manifest/",
   "codeowners": [],
-  "dependencies": ["frontend", "http", "lovelace", "media_source", "websocket_api"],
-  "after_dependencies": ["conversation", "tts", "weather", "calendar", "alexa_media"],
+  "dependencies": ["assist_pipeline", "frontend", "http", "lovelace", "media_source", "websocket_api"],
+  "after_dependencies": ["conversation", "tts", "weather", "calendar", "alexa_media", "music_assistant"],
   "requirements": [],
   "integration_type": "service",
   "iot_class": "calculated"

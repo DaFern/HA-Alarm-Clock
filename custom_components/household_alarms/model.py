@@ -11,18 +11,21 @@ ENTITY = re.compile(r"^[a-z_]+\.[a-z0-9_]+$")
 MODES = {"weekdays", "school", "non_school", "once"}
 CALENDAR_RULES = {"none", "block", "allow"}
 TONES = {"chime", "bell", "digital", "none"}
+RETIRED_PLAYBACK_FIELDS = {"agent", "tts", "language", "voice"}
 DEFAULTS = {
     "name": "New alarm", "person": "", "enabled": False,
     "time": "07:00", "mode": "weekdays", "weekdays": [0, 1, 2, 3, 4],
     "date": "", "calendar": "", "calendar_rule": "block", "calendar_filters": "",
     "speaker": "", "tone": "chime",
+    "music_enabled": False, "music_track": "", "music_track_name": "", "music_server": "",
+    "music_gain": 25, "speech_delay": 0,
     "start_volume": 20, "max_volume": 60, "volume_step": 10,
     "repeat_seconds": 60, "snooze_enabled": True, "snooze_minutes": 5,
     "max_snoozes": 3, "deadline": "", "allow_sleep_in": False,
     "notify_enabled": True, "notify_service": "",
-    "bedtime_entity": "", "briefing_enabled": False,
-    "agent": "", "instructions": "Give a short, friendly good morning message. Include the supplied time and weather. Do not make up information.",
-    "weather": "", "tts": "", "language": "", "voice": "",
+    "bedtime_entity": "", "clear_sleep_on_dismiss": False, "briefing_enabled": False,
+    "assistant_id": "", "instructions": "Give a short, friendly good morning message. Include the supplied time and weather. Do not make up information.",
+    "weather": "",
     "schedule_enabled": False, "schedule_calendars": [],
     "briefing_words": 100, "schedule_include": "", "schedule_exclude": "",
 }
@@ -42,11 +45,13 @@ def clock(value: str) -> time:
         raise AlarmError("Invalid time") from err
 
 
-def validate(data: dict, alarm_id: str | None = None) -> dict:
+def validate(data: dict, alarm_id: str | None = None, *, require_speaker: bool = True) -> dict:
     """Validate a complete configuration; never accept runtime fields from clients."""
-    if not isinstance(data, dict) or set(data) - (set(DEFAULTS) | {"id"}):
+    if not isinstance(data, dict) or set(data) - (set(DEFAULTS) | RETIRED_PLAYBACK_FIELDS | {"id"}):
         raise AlarmError("Unknown alarm settings")
-    result = {**DEFAULTS, **data}
+    # Older alarm schedules/speakers remain intact, but their independent voice
+    # settings must never override a named assistant or guess which one to use.
+    result = {**DEFAULTS, **{key: value for key, value in data.items() if key not in RETIRED_PLAYBACK_FIELDS}}
     result["weekdays"] = list(result["weekdays"]) if isinstance(result["weekdays"], list) else result["weekdays"]
     calendars = result["schedule_calendars"]
     if not isinstance(calendars, list) or len(calendars) > 10 or any(
@@ -56,7 +61,7 @@ def validate(data: dict, alarm_id: str | None = None) -> dict:
         raise AlarmError("Choose up to ten calendars for your morning message")
     result["schedule_calendars"] = list(dict.fromkeys(calendars))
     result["id"] = alarm_id or str(uuid.uuid4())
-    for key in ("name", "person", "instructions", "voice", "language", "date", "calendar_filters", "schedule_include", "schedule_exclude"):
+    for key in ("name", "person", "instructions", "assistant_id", "date", "calendar_filters", "schedule_include", "schedule_exclude"):
         value = result[key]
         limit = 10000 if key == "instructions" else 2000 if key in ("calendar_filters", "schedule_include", "schedule_exclude") else 100
         if not isinstance(value, str) or len(value) > limit:
@@ -71,12 +76,13 @@ def validate(data: dict, alarm_id: str | None = None) -> dict:
         result[key] = "\n".join(phrases)
     if not result["name"]:
         raise AlarmError("Give the alarm a name")
-    for key in ("enabled", "snooze_enabled", "allow_sleep_in", "notify_enabled", "briefing_enabled", "schedule_enabled"):
+    for key in ("enabled", "snooze_enabled", "allow_sleep_in", "notify_enabled", "briefing_enabled", "schedule_enabled", "clear_sleep_on_dismiss", "music_enabled"):
         if type(result[key]) is not bool:
             raise AlarmError(f"Invalid {key}")
     limits = {
         "start_volume": (1, 100), "max_volume": (1, 100), "volume_step": (0, 25),
         "repeat_seconds": (30, 300), "snooze_minutes": (1, 30), "max_snoozes": (0, 10),
+        "music_gain": (1, 30), "speech_delay": (0, 120),
     }
     for key, (low, high) in limits.items():
         value = result[key]
@@ -84,6 +90,16 @@ def validate(data: dict, alarm_id: str | None = None) -> dict:
             raise AlarmError(f"{key} must be between {low} and {high}")
     if result["start_volume"] > result["max_volume"]:
         raise AlarmError("Starting volume must not exceed maximum volume")
+    if not isinstance(result["music_track"], str) or (result["music_track"] and not re.fullmatch(r"library://track/[0-9]{1,20}", result["music_track"])):
+        raise AlarmError("Choose a song from this Music Assistant library")
+    if not isinstance(result["music_track_name"], str) or len(result["music_track_name"]) > 300:
+        raise AlarmError("Invalid song name")
+    if result["music_enabled"] and not result["music_track"]:
+        raise AlarmError("Choose a song before enabling music")
+    if not isinstance(result["music_server"], str) or (result["music_server"] and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", result["music_server"])):
+        raise AlarmError("Invalid Music Assistant connection")
+    if result["music_enabled"] and not result["music_server"]:
+        raise AlarmError("Search and reselect this song to bind its Music Assistant connection")
     if not isinstance(result["mode"], str) or not isinstance(result["tone"], str) or result["mode"] not in MODES or result["tone"] not in TONES:
         raise AlarmError("Invalid schedule or sound")
     if not isinstance(result["calendar_rule"], str) or result["calendar_rule"] not in CALENDAR_RULES:
@@ -113,22 +129,16 @@ def validate(data: dict, alarm_id: str | None = None) -> dict:
         raise AlarmError("Choose a calendar and add at least one event title for days to allow")
     for key, domain in {
         "speaker": "media_player", "calendar": "calendar", "weather": "weather",
-        "tts": "tts", "agent": "conversation", "notify_service": "notify",
+        "notify_service": "notify",
         "bedtime_entity": "input_boolean",
     }.items():
         value = result[key]
         if not isinstance(value, str) or (value and (not ENTITY.fullmatch(value) or not value.startswith(domain + "."))):
             raise AlarmError(f"Invalid {key}")
-    if not result["speaker"]:
+    if require_speaker and not result["speaker"]:
         raise AlarmError("Select the alarm speaker")
-    if result["tone"] == "none" and not result["tts"]:
-        raise AlarmError("Choose a voice or an alarm sound")
-    if result["briefing_enabled"] and not result["tts"]:
-        raise AlarmError("Choose a voice for the morning message")
-    if result["briefing_enabled"] and not result["agent"]:
-        raise AlarmError("Select an Assist agent for the briefing")
-    if result["voice"] and not result["language"]:
-        raise AlarmError("Select the language for the chosen voice")
+    if not result["bedtime_entity"]:
+        result["clear_sleep_on_dismiss"] = False
     if result["schedule_enabled"] and not result["schedule_calendars"]:
         raise AlarmError("Choose at least one calendar for today's schedule")
     if result["schedule_enabled"] and not result["briefing_enabled"]:

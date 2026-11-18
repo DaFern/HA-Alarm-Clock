@@ -15,6 +15,9 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, EVENT_CHANGED, MAX_ALARMS, STORAGE_VERSION
+from .assistants import assistants, preview_audio, resolve_assistant, speech_options
+from .ma_audio import MusicTests
+from .music import AlarmMusic
 from .model import (
     AlarmError, DEFAULTS, deadline_at, elapsed_after, finite_number, is_school_day, include_event_title, speech_wait_seconds,
     local_occurrence, matches, snooze_until, validate, volume,
@@ -48,6 +51,7 @@ class AlarmManager:
         self.test_results = {}
         self.sensor_entity_id = None
         self.context = Context()
+        self.music_tests = MusicTests(self)
 
     async def async_load(self):
         data = await self.store.async_load()
@@ -118,11 +122,20 @@ class AlarmManager:
         now = dt_util.now()
         for alarm in self.alarms.values():
             run = self.runs.get(alarm["id"])
-            result.append({**deepcopy(alarm), "run": deepcopy(run), "next": self._next(alarm, now)})
+            warning = ""
+            try:
+                resolve_assistant(self.hass, alarm["assistant_id"], voice=True)
+            except AlarmError as err:
+                if alarm["assistant_id"] or alarm["briefing_enabled"] or alarm["tone"] == "none":
+                    warning = str(err)
+            result.append({**deepcopy(alarm), "run": deepcopy(run), "next": self._next(alarm, now),
+                           "assistant_warning": warning})
         return {
             "revision": self.revision, "alarms": result, "defaults": deepcopy(DEFAULTS),
             "warnings": list(self.warnings.values()),
             "test_results": deepcopy(self.test_results),
+            "music_test": self.music_tests.snapshot(),
+            "assistants": [{"id": item.id, "name": item.name} for item in assistants(self.hass)],
             "notify_services": sorted("notify." + name for name in self.hass.services.async_services().get("notify", {})),
         }
 
@@ -221,6 +234,19 @@ class AlarmManager:
                 task.cancel()
         if task:
             await asyncio.gather(task, return_exceptions=True)
+        if alarm["music_enabled"] and run.get("music_attempt"):
+            await AlarmMusic(self, alarm, run).stop()
+        if action == "dismiss" and alarm["bedtime_entity"] and alarm["clear_sleep_on_dismiss"]:
+            # Dismissal is already persisted and delivery cancelled. A helper failure
+            # must never undo it or allow a later repeat to start.
+            try:
+                state = self.hass.states.get(alarm["bedtime_entity"])
+                if not state or state.state in ("unknown", "unavailable"):
+                    raise AlarmError("Sleep switch is unavailable")
+                await self._call("input_boolean", "turn_off", {"entity_id": alarm["bedtime_entity"]})
+                self.warnings.pop(f"sleep:{alarm_id}", None)
+            except Exception:
+                self.warnings[f"sleep:{alarm_id}"] = "The alarm was stopped, but its sleep switch could not be turned off. Check the switch in Home Assistant."
         self.changed()
         self.hass.bus.async_fire(f"{DOMAIN}_{action}", {"alarm_id": alarm_id, "person": alarm["person"]})
         if action == "sleep_in":
@@ -273,10 +299,12 @@ class AlarmManager:
         entity = alarm["calendar"]
         phrases = alarm["calendar_filters"]
         if not entity or not phrases.strip():
+            self.warnings.pop(f"calendar:{alarm['id']}", None)
             return False
         key = (entity, now.date().isoformat(), phrases)
         cached = self.calendar_event_cache.get(key)
         if cached and now.timestamp() - cached[0] < 300:
+            self._calendar_warning(alarm, cached[1])
             return cached[1]
         try:
             state = self.hass.states.get(entity)
@@ -297,14 +325,20 @@ class AlarmManager:
                 include_event_title(str(event.get("summary", "")), phrases)
                 for event in events if isinstance(event, dict)
             )
-            self.warnings.pop(f"calendar:{alarm['id']}", None)
         except Exception:
-            result = False
-            self.warnings[f"calendar:{alarm['id']}"] = "Could not check this calendar. Check the calendar and try again."
+            result = None
+        self._calendar_warning(alarm, result)
         self.calendar_event_cache[key] = (now.timestamp(), result)
         today = now.date().isoformat()
         self.calendar_event_cache = {k: v for k, v in self.calendar_event_cache.items() if k[1] == today}
         return result
+
+    def _calendar_warning(self, alarm, result):
+        key = f"calendar:{alarm['id']}"
+        if result is None:
+            self.warnings[key] = "Could not check this calendar. The alarm will use its selected days for now. Check the calendar in Home Assistant."
+        else:
+            self.warnings.pop(key, None)
 
     async def async_tick(self, _now=None):
         if self.closed or self.ticking:
@@ -320,6 +354,7 @@ class AlarmManager:
             self.ticking = False
 
     async def _tick(self, now):
+        before_warnings = dict(self.warnings)
         schedule = {}
         for alarm in list(self.alarms.values()):
             if alarm["enabled"]:
@@ -365,7 +400,7 @@ class AlarmManager:
                             changed = True
                         if alarm["notify_enabled"] and not run.get("deadline_alerted") and alarm_id not in self.alert_tasks:
                             alert.append(alarm_id)
-                    if now.timestamp() >= datetime.fromisoformat(run["next_ring"]).timestamp() and alarm_id not in self.tasks:
+                    if now.timestamp() >= datetime.fromisoformat(run["next_ring"]).timestamp() and alarm_id not in self.tasks and not run.get("music_blocked"):
                         run.update(status="ringing", next_ring=elapsed_after(now, alarm["repeat_seconds"]).isoformat())
                         deliver.append(alarm_id)
                         changed = True
@@ -378,16 +413,16 @@ class AlarmManager:
                 if not due or not 0 <= (now.astimezone(timezone.utc) - due.astimezone(timezone.utc)).total_seconds() < 300:
                     continue
                 bedtime = self.hass.states.get(alarm["bedtime_entity"]) if alarm["bedtime_entity"] else None
-                if bedtime and bedtime.state == "off":
-                    continue
+                skipped = bedtime is not None and bedtime.state == "off"
                 self.runs[alarm_id] = {
                     "date": now.date().isoformat(), "started": due.isoformat(),
                     "next_ring": elapsed_after(now, alarm["repeat_seconds"]).isoformat(),
-                    "status": "ringing", "snoozes": 0, "cycles": 0,
+                    "status": "missed" if skipped else "ringing", "snoozes": 0, "cycles": 0,
                     "escalated": False, "deadline_alerted": False, "error": "",
                 }
-                self.delivery_alerted.discard(alarm_id)
-                deliver.append(alarm_id)
+                if not skipped:
+                    self.delivery_alerted.discard(alarm_id)
+                    deliver.append(alarm_id)
                 changed = True
             if changed:
                 try:
@@ -399,7 +434,7 @@ class AlarmManager:
                 self._spawn(self.tasks, alarm_id, self._deliver(alarm_id))
             for alarm_id in alert:
                 self._spawn(self.alert_tasks, alarm_id, self._deadline_alert(alarm_id))
-        if changed:
+        if changed or self.warnings != before_warnings:
             self.changed()
 
     def _spawn(self, collection, key, coroutine):
@@ -521,12 +556,13 @@ class AlarmManager:
                 "unavailable_calendars": unavailable, "truncated": truncated or len(events) > 20,
                 "scope": "Only the calendars explicitly selected for this alarm. Shared calendars may contain other people's events."}
 
-    async def async_briefing(self, alarm):
+    async def async_briefing(self, alarm, pipeline=None):
         """Use a fresh conversation, supplied facts, and a strict generation timeout."""
         now = dt_util.now()
         greeting = f"Good morning, {alarm['person'] or alarm['name']}. It is {now.strftime('%H:%M')}. It is time to get up."
         if not alarm["briefing_enabled"]:
             return greeting
+        pipeline = pipeline or resolve_assistant(self.hass, alarm["assistant_id"])
         facts = {"person": alarm["person"], "local_time": now.isoformat(), "weather": self._weather_context(alarm)}
         facts["schedule"] = await self._schedule_context(alarm, now)
         word_limit = alarm.get("briefing_words", 100)
@@ -543,7 +579,7 @@ class AlarmManager:
             "\nFacts: " + json.dumps(facts, ensure_ascii=False)
         )
         response = await self._call("conversation", "process", {
-            "agent_id": alarm["agent"], "text": prompt,
+            "agent_id": pipeline.conversation_engine, "language": pipeline.conversation_language, "text": prompt,
             "conversation_id": str(uuid.uuid4()),
         }, timeout=25 if word_limit == 100 else 45, response=True)
         speech = response.get("response", {}).get("speech", {}).get("plain", {}).get("speech", "")
@@ -552,12 +588,33 @@ class AlarmManager:
         # Bound speech and escape markup before it reaches a speaker integration.
         return " ".join(speech.replace("<", " ").replace(">", " ").split()[:word_limit])[:1200 if word_limit == 100 else 6000]
 
-    async def _speak(self, alarm, message):
-        options = {"voice": alarm["voice"]} if alarm["voice"] else {}
-        data = {"entity_id": alarm["tts"], "media_player_entity_id": alarm["speaker"],
-                "message": message, "cache": False, "options": options}
-        if alarm["language"]:
-            data["language"] = alarm["language"]
+    async def async_preview(self, config):
+        """Generate speech from an unsaved draft, without a speaker or alarm writes."""
+        alarm = validate(config, require_speaker=False)
+        pipeline = resolve_assistant(self.hass, alarm["assistant_id"], voice=True)
+        try:
+            text = await self.async_briefing(alarm, pipeline)
+        except Exception as err:
+            raise AlarmError("The assistant could not write a message. Check its conversation settings and provider, then try again.") from err
+        try:
+            return {"text": text, **await preview_audio(self.hass, pipeline, text)}
+        except AlarmError as err:
+            return {"text": text, "error": str(err)}
+
+    async def _speak(self, alarm, message, pipeline=None):
+        pipeline = pipeline or resolve_assistant(self.hass, alarm["assistant_id"], voice=True)
+        if not pipeline.tts_engine.startswith("tts."):
+            # Older HA voice providers are pipeline engines, not entity targets.
+            from homeassistant.components import tts
+            media_id = tts.generate_media_source_id(self.hass, message, engine=pipeline.tts_engine,
+                language=pipeline.tts_language, options=speech_options(pipeline), cache=False)
+            await self._call("media_player", "play_media", {"entity_id": alarm["speaker"],
+                "media_content_id": media_id, "media_content_type": "music", "announce": True},
+                timeout=60 if alarm.get("briefing_words", 100) > 100 else 30)
+            return
+        data = {"entity_id": pipeline.tts_engine, "media_player_entity_id": alarm["speaker"],
+                "message": message, "cache": False, "options": speech_options(pipeline),
+                "language": pipeline.tts_language}
         # HA's tts.speak uses announce=True, including the installed Echo TTS bridge.
         await self._call("tts", "speak", data, timeout=60 if alarm.get("briefing_words", 100) > 100 else 30)
 
@@ -569,11 +626,45 @@ class AlarmManager:
         original = {}
         last_volume = None
         brief_task = None
+        speech_warning = ""
         try:
+            if self.music_tests.active:
+                await self.music_tests.async_shutdown()
+                if self.music_tests.active:
+                    raise AlarmError("The experimental music test could not confirm its stop")
             members = self._reserve(alarm["speaker"], owner)
             speaker = self.hass.states.get(alarm["speaker"])
             if not speaker or speaker.state in ("unknown", "unavailable"):
                 raise AlarmError("Speaker is unavailable")
+            if alarm["music_enabled"] and not test:
+                await AlarmMusic(self, alarm, run).play()
+                return
+            first_ring = run["cycles"] == 0 and not run.get("escalated") and not run.get("briefing_attempted", False)
+            wants_speech = first_ring and bool(alarm["assistant_id"] or alarm["briefing_enabled"] or alarm["tone"] == "none")
+            pipeline = None
+            if wants_speech:
+                if not test:
+                    async with self.lock:
+                        if self.runs.get(alarm_id) is not run or run["status"] not in ACTIVE:
+                            return
+                        # Persist before generation/playback. An interrupted first
+                        # ring must not repeat the briefing after snooze or restart.
+                        previous_attempt = run.get("briefing_attempted")
+                        run["briefing_attempted"] = True
+                        try:
+                            await self._save()
+                        except Exception:
+                            if previous_attempt is None:
+                                run.pop("briefing_attempted", None)
+                            else:
+                                run["briefing_attempted"] = previous_attempt
+                            raise
+                try:
+                    pipeline = resolve_assistant(self.hass, alarm["assistant_id"], voice=True)
+                    self.warnings.pop(f"assistant:{alarm_id}", None)
+                except AlarmError as err:
+                    speech_warning = str(err)
+                    self.warnings[f"assistant:{alarm_id}"] = speech_warning
             for member in members:
                 state = self.hass.states.get(member)
                 level = state.attributes.get("volume_level") if state else None
@@ -581,40 +672,46 @@ class AlarmManager:
                     original[member] = level
             last_volume = volume(alarm, run["cycles"], run.get("escalated", False))
             await self._call("media_player", "volume_set", {"entity_id": alarm["speaker"], "volume_level": last_volume})
-            if run["cycles"] == 0 and not run.get("escalated") and alarm["briefing_enabled"] and not briefing_test:
-                brief_task = asyncio.create_task(self.async_briefing(alarm))
-            if alarm["tone"] != "none" and not briefing_test:
+            if pipeline is not None:
+                brief_task = asyncio.create_task(self.async_briefing(alarm, pipeline))
+            # Voice-only alarms use a tone on subsequent rings and whenever their
+            # selected assistant cannot speak. Never leave them silently ringing.
+            tone = alarm["tone"]
+            if tone == "none" and pipeline is None:
+                tone = "chime"
+            if tone != "none" and not (briefing_test and pipeline is not None):
                 try:
-                    await self._call("media_player", "play_media", {
-                        "entity_id": alarm["speaker"], "media_content_type": "music",
-                        "media_content_id": f"media-source://{DOMAIN}/{alarm['tone']}", "announce": True,
-                    })
-                    # Do not replace ringing with speech two seconds later.
-                    await asyncio.sleep(9)
+                    await self._play_tone(alarm, tone)
                     self.warnings.pop(f"{alarm_id}:audio", None)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
                     if test:
                         raise
+                    if pipeline is None:
+                        raise
                     self.warnings[f"{alarm_id}:audio"] = "The alarm sound could not play. A spoken wake-up will be tried instead."
                     if alarm_id not in self.delivery_alerted:
                         await self._notify(alarm, "Alarm sound needs attention", f"{alarm['name']}: the ringing sound failed. A spoken wake-up will be attempted.")
                         self.delivery_alerted.add(alarm_id)
-            if briefing_test:
-                message = await self.async_briefing(alarm)
-            elif brief_task:
+            if brief_task:
                 try:
                     message = await brief_task
                 except Exception:
                     message = f"Good morning, {alarm['person'] or alarm['name']}. It is time to get up."
-                    self.warnings[alarm_id] = "The assistant could not write a morning message. A normal wake-up message was used."
-            else:
-                message = f"Good morning, {alarm['person'] or alarm['name']}. It is time to get up."
-            if alarm["tts"]:
-                await self._speak(alarm, message)
-                # Service completion only means accepted, not that playback finished.
-                await asyncio.sleep(speech_wait_seconds(message))
+                    speech_warning = "The assistant could not write a morning message. A normal wake-up message was used."
+                    self.warnings[f"assistant:{alarm_id}"] = speech_warning
+                try:
+                    await self._speak(alarm, message, pipeline)
+                    # Service completion means accepted, not playback finished.
+                    await asyncio.sleep(speech_wait_seconds(message))
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    speech_warning = "The assistant's voice could not play. Check its voice settings and the speaker. The alarm will use a tone."
+                    self.warnings[f"assistant:{alarm_id}"] = speech_warning
+                    if tone == "none" or briefing_test:
+                        await self._play_tone(alarm, "chime")
             if not test:
                 async with self.lock:
                     if self.runs.get(alarm_id) is run:
@@ -622,17 +719,22 @@ class AlarmManager:
                         run["error"] = ""
                         await self._save()
             else:
-                self.test_results[alarm_id] = "The test has finished. Did you hear it at the speaker?"
+                self.test_results[alarm_id] = speech_warning or "The test has finished. Did you hear it at the speaker?"
         except asyncio.CancelledError:
             raise
         except Exception as err:
             if test:
-                self.test_results[alarm_id] = "The test failed. Please check the speaker and chosen voice service."
+                self.test_results[alarm_id] = "The test failed. Please check the speaker and chosen assistant's voice settings."
                 _LOGGER.warning("Alarm audio test failed (%s)", type(err).__name__)
                 return
             async with self.lock:
                 if self.runs.get(alarm_id) is run:
-                    run["error"] = "The speaker could not play the alarm or is busy. We will try again."
+                    if alarm["music_enabled"]:
+                        run["error"] = (str(err) if isinstance(err, AlarmError) else "The music alarm could not play. Check the companion and speaker.")
+                        if run.get("music_blocked"):
+                            run["error"] += " Automatic playback for this run is blocked; check the speaker and dismiss the alarm."
+                    else:
+                        run["error"] = "The speaker could not play the alarm or is busy. We will try again."
                     await self._save()
             if alarm_id not in self.delivery_alerted:
                 await self._notify(alarm, "Alarm needs attention", f"{alarm['name']}: speaker playback failed or was busy. Check the selected speaker.")
@@ -656,6 +758,13 @@ class AlarmManager:
                 if self.owners.get(member) == owner:
                     self.owners.pop(member)
             self.changed()
+
+    async def _play_tone(self, alarm, tone):
+        await self._call("media_player", "play_media", {
+            "entity_id": alarm["speaker"], "media_content_type": "music",
+            "media_content_id": f"media-source://{DOMAIN}/{tone}", "announce": True,
+        })
+        await asyncio.sleep(9)
 
     async def _notify(self, alarm, title, message):
         if not alarm["notify_enabled"]:
@@ -692,6 +801,9 @@ class AlarmManager:
             raise AlarmError("Dismiss the active alarm before testing")
         if alarm_id in self.tasks:
             raise AlarmError("A test is already running")
+        if self.alarms[alarm_id]["music_enabled"]:
+            alarm = self.alarms[alarm_id]
+            return await self.music_tests.async_start_selected(alarm)
         self.test_results[alarm_id] = "Playing the test. Listen at the chosen speaker."
         self._spawn(self.tasks, alarm_id, self._deliver(alarm_id, test=True, briefing_test=briefing))
         self.changed()
@@ -702,6 +814,7 @@ class AlarmManager:
 
     async def async_shutdown(self):
         self.closed = True
+        await self.music_tests.async_shutdown()
         tasks = [*self.tasks.values(), *self.alert_tasks.values(), *self.preview_tasks]
         for task in tasks:
             task.cancel()

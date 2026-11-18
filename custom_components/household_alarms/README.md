@@ -1,4 +1,221 @@
-# HA-AlarmClock 0.4.1
+# HA-AlarmClock 0.7.0b1 — project release candidate
+
+## Scheduled selected-song alarms (not deployed)
+
+Each alarm now has an opt-in **Music** section: select its MA speaker, search
+that server's song library, choose a song, and save its background gain (1–30%)
+and voice delay (0–120 seconds). Changing speaker clears the song selection:
+library identifiers are bound to the HA MA connection and cannot be assumed to
+match a different server, even if it reuses the same speaker entity id. Existing
+alarms keep their schedules/speakers and default to music **off**.
+
+Music replaces the tone. It plays under the selected named HA assistant's exact
+voice/language, once on the first ring, and continues afterwards. Delay is music
+playback time, not a sleep before starting the song. Message/TTS preparation
+happens before playback. A short song can end before delayed speech finishes.
+Missing assistant voices warn and leave music playing; tone-only legacy alarms
+retain their existing fallback behavior.
+
+Snooze stops playback, uses the normal saved snooze minutes/deadline/limit, and
+starts the **same selected song from the beginning without speech**. Dismiss and
+Sleep in stop the owned queue; their normal sleep-switch behavior remains intact.
+Music repeats at song end (two-second polling, not gapless), rather than at the
+tone repeat interval. Hardware volume is selected at the start of each ring;
+the deadline can interrupt and escalate it. The background gain stays separate.
+
+The first speech attempt and each music dispatch id are saved before generation
+or playback. After an unclean restart, HA may reattach only to that exact owned
+session, never blindly start a replacement. Uncertain starts/stops and external
+takeover block further automatic playback for that run and surface an error.
+An explicit dismissal can retry a guarded stop; otherwise check the speaker
+manually. Successful clean shutdown stops playback; later resumption is music-only.
+
+The old **Experimental music test** panel is removed. The normal saved alarm
+**Test** button confirms speaker, song, volume, gain and delay, then offers
+Snooze/Dismiss/Sleep in controls in a bounded 30-minute test. Tests never edit
+saved schedules, run records or sleep switches. The saved alarm's snooze minutes
+are used, not accelerated experimental seconds. Legacy protocol-1 test endpoints
+remain for compatibility but are not the scheduled alarm API.
+
+### Required companion and release boundary
+
+Stock MA and the previously published protocol-1 fork are **not sufficient**.
+Scheduled playback requires the protocol-2 companion prepared under
+[`packaging/music_assistant`](../../packaging/music_assistant/README.md).
+It has a separate app identity/data directory and an exact upstream image digest,
+with hash-guarded source patching at build time and no startup Git installation.
+Disable Supervisor automatic updates when installing it; this cannot be enforced
+by its manifest. Busy/nonempty/grouped queues, Repeat, Autoplay and ambient
+overlay are rejected rather than changed or replaced automatically.
+
+The user confirmed a full-song playthrough, simultaneous briefing, Dismiss and
+Snooze on the earlier DEV prototype. **The intermittent Echo song/chapter restart
+is not reproduced or fixed.** The new scheduled protocol/package still requires
+an actual image build and authenticated/live acceptance tests. Nothing in this
+candidate has been deployed, installed, restarted or released. Source publication
+does not change those deployment boundaries; see the repository's
+[`morning handoff`](../../docs/DEPLOYMENT_HANDOFF.md) for the outstanding work.
+Keep an independent alarm for essential wake-ups.
+
+Upstream implementation evidence was submitted to the existing feature request:
+https://github.com/music-assistant/support/discussions/998#discussioncomment-19695063
+
+Checks: `python3 -B -m unittest discover -s tests -p 'test_*.py' -q` and
+`python3 -B tests/run_browser.py`. Opt-in native FFmpeg tests are documented in
+`prototypes/ma_one_shot/README.md`. These do not boot an authenticated MA server.
+
+## Historical 0.6.0 prototype notes
+
+The sections below record earlier development stages; their pending/deployed
+labels describe those stages, not the 0.7.0b1 candidate above.
+
+## Experimental MA music test — HA panel deployed, MA source setup pending
+
+The card now has a collapsed **Experimental music test** panel, disabled until
+explicitly enabled on this dashboard device. It is separate from alarm settings:
+no music fields, schedules, persisted runs or sleep switches are changed. Choose
+a saved alarm for its assistant/message settings and explicitly select the
+development MA speaker. Check readiness without playing audio, then separately
+confirm Start music test, naming the speaker and volume.
+
+This requires the companion **patched MA 2.10.12 development build**, not the
+ordinary MA app. The new `ma_audio.py` adapter resolves the speaker through HA's
+entity registry and reuses the MA integration's already-authenticated client.
+It never reads/copies tokens or accesses internal configuration files. The MA
+capability check must explicitly match protocol 1; an unsupported build fails
+before song selection, speech generation or queue changes.
+
+The selected named HA assistant still supplies the conversation engine. Its TTS
+entity is matched to exactly one registered MA engine on the local Supervisor HA
+connection, with its exact language and optional voice passed through. Missing,
+ambiguous, legacy non-entity or remote-HA voices are rejected, not replaced with
+Piper or another default. Provider support for the chosen voice needs an audible
+test. MA's existing HA TTS renderer/cache/URL handling is used; this does not add
+a public personal-audio endpoint or change preview's separate cache-disabled API.
+
+The initial test randomly selects one library song from the **development
+server's own library**. Its library IDs need not match the stable server. Start
+requires one ungrouped idle player, an empty queue, Repeat and Autoplay off, and
+the ambient overlay off. Existing queues are never replaced. These settings
+are checked rather than silently changed. The test enqueues just its own song
+without autostart and binds the briefing to its new session before dispatch.
+
+Speaker volume is separately selectable from 1–40%; background music gain is
+0–30%, with speech gain 0.7. Gains are linear mix multipliers, not device volume.
+Music stays at its background gain after speech. Snooze is deliberately a
+**test-only 5–300 seconds**, default 10 seconds, not the saved alarm's snooze.
+It stops music and restarts the same queued song from zero with no new briefing
+generation or speech. The MA control endpoint checks the run, session, source,
+group and exact one-item queue under its playback lock before every control.
+
+Music-only repetitions are requested after the song goes idle, polled every two
+seconds; this is **not gapless looping**. Dismiss and Sleep in both stop only the
+test. A 30-minute HA-side watchdog also stops it. On successful owned completion,
+the test clears its own one-item queue and restores speaker volume only if the
+reported volume still equals the level it set. A takeover releases control
+without stopping/restoring someone else's playback. If MA does not confirm a
+stop, the UI reports uncertainty and keeps the reservation; Dismiss can retry a
+guarded stop, never a start. There is no blind playback retry or experimental
+tone fallback after uncertain dispatch.
+
+A real alarm delivery takes priority and first requests the test's guarded stop;
+if that cannot be confirmed, normal delivery reports/retries the conflict rather
+than overlapping audio. Shutdown/unload makes a bounded stop attempt. Test state
+is runtime-only: it is not resumed after HA/MA restart. If shutdown or connectivity
+prevents confirmation, check/stop the speaker manually. The server retains no
+automatic repeat setting, so HA loss does not create an endless server-side loop.
+
+### Validation and deployment boundary
+
+- Offline tests cover capability/voice matching, bounds, admin-only commands,
+  independent test state, cancel-before/after dispatch, uncertain-stop retry,
+  source takeover, same-song Snooze, watchdog and real-alarm priority.
+- The real custom card is exercised with fake HA transport in Chromium at 390
+  and 1280 pixels. Native audio tests use real MA helpers/FFmpeg with synthetic
+  tones, not actual TTS, an authenticated MA server or a physical speaker.
+- HA-AlarmClock 0.6.0 was deployed and verified loaded/rendering after an approved
+  Core restart on 2026-11-17. Saved alarm settings were not changed. The companion
+  fork is published at `DaFern/server@d66459f7f7eab48a18e7fb5d6c0768a17da2ef52`.
+  MA DEV source selection/full-server verification remain pending. Its inspected
+  logs reported a port 8097 conflict; stable and DEV must not share default ports.
+  No speaker test has run. The HA project changes remain uncommitted/unpushed.
+- Use the official Music Assistant DEV SERVER app's supported `server_repo`
+  mechanism with a reviewed fork commit pinned exactly. Do not patch the stable
+  app's container. Stop stable MA for the test window to avoid default-port
+  conflicts; keep its data untouched and configure the DEV app independently.
+  HA registry identifiers are not necessarily namespaced by MA server: verify
+  which config entry owns the chosen entity rather than assuming a second server
+  creates a second Kitchen entity. Do not delete/reassign production entities.
+- Before deploying, back up the current runtime integration as well as the full
+  system. HA custom-component deployment requires a separately approved Core
+  restart. Version/cache-busting should be bumped at deployment. Rollback stops
+  DEV MA and starts stable MA, plus restores the prior integration/restarts HA
+  if that code was deployed. No installation, fork publishing or restart is
+  automated by the test panel.
+
+Offline commands: `python3 -B tests/test_ma_audio.py`,
+`python3 -B tests/test_ma_test_commands.py`, and `python3 -B tests/run_browser.py`.
+See `../../prototypes/ma_one_shot/README.md` for the server patch and native tests.
+
+## Issue #1: Assist voices and spoken preview — project changes, not deployed
+
+**Choose an assistant** lists the named assistants from Home Assistant's
+Settings → Voice assistants. Each alarm stores the selected pipeline ID, not a
+separate conversation engine, TTS service, language or voice. Generation and
+speech resolve the assistant's current configuration through HA's pipeline API.
+**Play on** still chooses the alarm's output speaker.
+
+Older schedules and output speakers are preserved. Their old manual playback
+settings are retired on load and omitted from subsequent saves. No assistant is
+guessed from those settings. Choose an assistant again for spoken messages; a
+missing/deleted assistant or one without configured TTS is explained in the card
+and falls back to a tone. Sound-only alarms do not need an assistant.
+
+**Preview message** uses the current unsaved draft, including its instructions,
+weather and selected/filtered calendars. No alarm speaker is required. A popup
+shows loading, the generated text and local playback controls. Its audio uses the
+selected assistant's configured TTS engine, language and voice (or the engine's
+default voice if the pipeline does not specify one). Preview plays on the device
+viewing the dashboard, never the alarm speaker. Blocked autoplay offers a Play
+button; errors identify conversation or voice settings to check. Closing/Escape
+or disconnecting the card stops local audio, revokes its Blob URL and ignores late
+responses. Closing does not undo an already-submitted provider request.
+
+The administrator-only preview WebSocket returns bounded audio bytes (up to 8 MiB)
+and text; no personal-audio endpoint or public preview URL is added. The HA TTS API
+is called with disk caching disabled. Preview does not save an alarm, schedule or
+sleep switch. The voice provider receives the spoken text. The conversation
+assistant retains its usual permissions during preview as well as real alarms;
+the prompt's request not to take actions is not a security boundary.
+
+The briefing is attempted only on the first ring. This is persisted before
+generation/playback so an interruption, snooze or restart does not repeat the
+message. Subsequent rings use the chosen tone, or Chime for a voice-only alarm.
+If voice-only speech fails, Chime is attempted immediately and a warning is shown.
+
+These changes were checked offline against the HA 2026.11.1 pipeline/TTS API
+source. Actual HA loading, the configured voice on a physical speaker, dashboard
+audio on real devices, and Echo dismissal still require separately approved live
+verification. The GitHub issue must remain open until that work is verified.
+
+## Issue #1: scheduling and dismissal — project changes, not deployed
+
+The sleep switch remains optional. When a linked switch is off at the scheduled
+time, that occurrence is recorded as missed; turning it back on during the
+five-minute catch-up window does not replay it, including after a restart.
+Future occurrences stay enabled.
+
+With a linked switch, **Turn off the sleep switch when I dismiss the alarm** is
+opt-in per alarm and defaults off for existing alarms. Explicit dismissal of a
+ringing or snoozed run saves the dismissal and cancels delivery before trying to
+turn off the switch. A switch failure shows a warning without restoring the
+alarm. Snooze and Sleep in do not change the switch. Dashboard and service-based
+dismissals share this path; this does not establish a verified Echo command.
+
+For either selected-weekday calendar rule, an unavailable or failed calendar
+check rings on an otherwise eligible day, with a visible warning. A successful
+read with no matching events remains distinct: it permits the Skip rule but
+does not permit the Only ring rule. Calendar results are cached for five minutes.
 
 ## 0.4 automation lookup, longer messages and calendar filters — pending activation
 
@@ -57,7 +274,7 @@ The integration files are saved but are not loaded merely by saving them.
    are preserved. No internal files are edited directly. YAML-owned resources are
    left alone and use the extra-module fallback; manual module registration is
    recommended for that mode. Refresh an already-open app after activation.
-5. Create disabled test alarms. Confirm real speaker and selected Piper-voice
+5. Create disabled test alarms. Confirm real speaker and selected assistant-voice
    playback with the user present before enabling schedules.
 6. Migrate old alarms only after separate approval. Do not run duplicate schedules.
 
@@ -65,8 +282,8 @@ The integration files are saved but are not loaded merely by saving them.
 
 Each alarm has a name, person, enabled flag, local time, repeat days or one date,
 optional school holiday calendar, output speaker/group, generated ringing sound,
-starting/maximum volume, volume step, repeat interval, speech provider, language
-and installed voice. Three simple eight-second tones are generated in memory;
+starting/maximum volume, volume step, repeat interval and optional named assistant.
+Three simple eight-second tones are generated in memory;
 no film audio or downloaded sound library is included.
 
 Choose the weekdays when the alarm should ring, or choose one date. You can also
@@ -77,7 +294,8 @@ from the optional event filters used in a morning message.
 
 An optional latest wake-up time ends snoozing and raises the alarm to its loudest
 volume. If alerts are enabled, one message is sent until the alarm is stopped.
-The alarm does not claim that anyone is physically awake or change a sleep switch.
+The alarm does not claim that anyone is physically awake. Dismissal changes a
+linked sleep switch only when the per-alarm option is explicitly enabled.
 
 Use a notification destination such as the existing `notify.adults` service for
 phone alerts. If none is selected, alerts are persistent notifications **inside
@@ -98,10 +316,11 @@ when the current reported volume still matches the alarm's last setting, to avoi
 undoing a manual change. Already-sent audio may finish after dismissal; no further
 repeats are sent. Acceptance of a playback service call is **not** proof of sound.
 
-## Piper and Assist
+## Assist voices
 
-The Assist agent generates wording; the separately selected TTS provider and voice
-generate audio; the selected media player plays it. These are independent choices.
+The named assistant supplies the conversation engine and configured TTS provider,
+language and voice; the selected media player plays alarm audio. The integration
+does not change the assistant's configuration or choose a different voice itself.
 `tts.speak` uses HA's announcement media-source path, including the generated-audio
 bridge in the installed Alexa Media Player integration. Echo playback still needs
 that bridge's externally reachable URL and cloud connection. No Alexa integration
@@ -116,12 +335,13 @@ agent with tool access disabled if hard separation from device control is requir
 No existing JARVIS, F.R.I.D.A.Y. or other agent configuration is changed.
 
 The initial ringing sound is sent independently of briefing generation. If AI
-generation fails, the standard wake-up greeting is used. Deadline escalation does
-not start another AI briefing. A failure in both speaker playback and notification
+generation fails, the standard wake-up greeting is used. Only the first ring
+attempts speech; repeats and deadline escalation use tones. A failure in both speaker playback and notification
 delivery cannot be made reliable by software; maintain a separate critical alarm.
 
-The card's text preview may contact the selected AI provider but never plays audio.
-Every audio test requires an explicit confirmation naming the speaker and volume.
+The card's spoken preview may contact the selected assistant and voice provider
+and plays locally when Preview message is selected. A saved-alarm speaker test
+requires an explicit confirmation naming the speaker and volume.
 Tests do not create an active alarm, change bedtime, or enable a schedule.
 
 Generic Alexa actionable-notification `ResponseYes` events are intentionally **not**
@@ -143,7 +363,7 @@ data:
 This dismisses only Charlotte's active alarms/pending snoozes; Dan's and Meg's
 alarms are untouched. Alternatively, link an alarm to Charlotte's bedtime boolean:
 an `off` state prevents or dismisses that alarm on the next scheduler tick.
-Dismissal does not itself change the bedtime boolean. The existing early-wake
+Dismissal changes the bedtime boolean only when the per-alarm option is enabled. The existing early-wake
 warning and motion corroboration remain the automation's responsibility.
 
 ## API and access

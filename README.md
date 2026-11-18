@@ -6,10 +6,29 @@ The integration source is in `custom_components/household_alarms/`. See its
 [README](custom_components/household_alarms/README.md) for setup, behavior, and
 acceptance-testing notes.
 
+## Current candidate: 0.7.0b1
+
+The project contains opt-in scheduled Music Assistant songs, per-alarm library
+search/selection, separate background gain, and a 0–120-second voice delay.
+The briefing is attempted once; Snooze restarts the same song without speech.
+Existing schedules and speakers remain unchanged, with music off by default.
+
+**This is not a published stable release or a production deployment.** Music
+requires the pinned protocol-2 MA companion; stock MA and the older DEV
+protocol-1 patch are not compatible with the scheduled-music API.
+
+- [Morning deployment handoff](docs/DEPLOYMENT_HANDOFF.md)
+- [Pinned MA build, installation gates and rollback](packaging/music_assistant/README.md)
+- [Upstream feature proposal](https://github.com/music-assistant/support/discussions/998#discussioncomment-19695063)
+
+The MA image still needs building and live acceptance testing. Leave DEV and
+its data installed until the replacement is verified. The intermittent Echo
+song/chapter restart remains unreproduced and unfixed.
+
 Offline tests are in `tests/`:
 
 ```text
-python3 -B tests/test_alarms.py
+python3 -B -m unittest discover -s tests -p 'test_*.py' -q
 python3 -B tests/run_browser.py
 node --check custom_components/household_alarms/frontend/household-alarms-card.js
 ```
