@@ -62,10 +62,13 @@ phone, but stale actions are rejected after the run changes. A Core reload can
 republish an active occurrence with fresh controls; it cannot receive actions
 while offline.
 
-Deployment/restart were approved and completed; physical-phone acceptance must
-include two phones/occurrences where possible, locked-screen wake/visibility,
-Dismiss, Snooze limits/deadline, stale buttons, offline delivery, cleanup and
-restart behavior. Automated tests use fakes, not a real phone or push gateway.
+Deployment/restart were approved and completed. On 2026-11-18 the user confirmed
+notification Snooze, music-only resume, Dismiss, and removal of the notification
+after dismissal through another route during a scheduled Kitchen alarm. This does
+not establish locked-screen wake/visibility. Remaining physical-phone acceptance
+includes two phones/occurrences where possible, locked-screen wake/visibility,
+Snooze limits/deadline, stale buttons, offline delivery and restart behavior.
+Automated tests use fakes, not a real phone or push gateway.
 
 ## Scheduled selected-song alarms (deployed candidate; acceptance pending)
 
@@ -103,6 +106,22 @@ Snooze/Dismiss/Sleep in controls in a bounded 30-minute test. Tests never edit
 saved schedules, run records or sleep switches. The saved alarm's snooze minutes
 are used, not accelerated experimental seconds. Legacy protocol-1 test endpoints
 remain for compatibility but are not the scheduled alarm API.
+
+### Changing the time after today's alarm (deployed 2026-11-18)
+
+After dismissing or finishing today's run, saving a **different time still in
+the future today** permits another scheduled run. The save clears the previous
+run and its stale error together; it does not start playback immediately.
+Unchanged saves, enable/disable toggles, Snooze and Dismiss do not re-arm an alarm.
+Moving the time into the past does not replay it. Active alarms must be dismissed
+first, and pending cleanup or an unconfirmed music stop prevents re-arming until
+the previous playback has been safely stopped. A failed save keeps the old run.
+
+The user confirmed same-day rescheduling and a successful scheduled Kitchen run
+with music and Jarvis voice-over, notification Snooze resuming music without a
+second briefing, and Dismiss stopping playback and clearing the notification.
+The rescheduling change does not fix the separately observed connection resets;
+their cause and long-term playback reliability remain unresolved.
 
 ### Required companion and release boundary
 

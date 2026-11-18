@@ -817,6 +817,123 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         await self.manager._tick(self.now.replace(hour=21))
         self.assertEqual(self.manager._deliver.await_count, 1)
 
+    async def test_future_time_edit_rearms_finished_run_and_survives_reload(self):
+        for status in ("dismissed", "sleeping_in", "missed"):
+            with self.subTest(status=status):
+                alarm_id = await self.create(enabled=True)
+                self.manager.runs[alarm_id] = run_at(self.now, status=status,
+                    error="Old playback failure", music_blocked=True, briefing_attempted=True)
+                self.now = self.now.replace(minute=5)
+                self.manager._deliver = AsyncMock()
+                await self.manager.async_put(config(enabled=True, time="07:10"),
+                    self.manager.revision, alarm_id)
+                self.assertNotIn(alarm_id, self.manager.runs)
+                self.assertNotIn(alarm_id, self.manager.store.data["runs"])
+                self.assertEqual(self.manager._next(self.manager.alarms[alarm_id], self.now),
+                    self.now.replace(minute=10).isoformat())
+                self.assertFalse(self.hass.services.calls)
+                self.manager._deliver.assert_not_called()
+                other = AlarmManager(self.hass)
+                other.store.data = deepcopy(self.manager.store.data)
+                await other.async_load()
+                other._deliver = AsyncMock()
+                await other._tick(self.now.replace(minute=10))
+                await asyncio.gather(*other.tasks.values())
+                other._deliver.assert_awaited_once_with(alarm_id)
+                fresh = other.runs[alarm_id]
+                self.assertEqual(fresh["error"], "")
+                self.assertNotIn("briefing_attempted", fresh)
+                self.assertNotIn("music_blocked", fresh)
+                await other.async_action(alarm_id, "dismiss")
+                await other._tick(self.now.replace(minute=11))
+                self.assertEqual(other._deliver.await_count, 1)
+                # Isolate the next subcase's scheduling state.
+                self.manager.alarms.pop(alarm_id)
+
+    async def test_unchanged_time_and_enable_toggles_preserve_finished_run(self):
+        alarm_id = await self.create(enabled=True)
+        previous = run_at(self.now, status="dismissed", error="Old failure")
+        self.manager.runs[alarm_id] = deepcopy(previous)
+        self.manager._deliver = AsyncMock()
+        for fields in ({}, {"name": "Renamed"}, {"enabled": False}, {"enabled": True}):
+            await self.manager.async_put(config(**{"enabled": True, **fields}),
+                self.manager.revision, alarm_id)
+            self.assertEqual(self.manager.runs[alarm_id], previous)
+            await self.manager._tick(self.now + timedelta(seconds=30))
+        self.manager._deliver.assert_not_called()
+
+    async def test_time_edit_to_past_or_now_does_not_replay_finished_run(self):
+        alarm_id = await self.create(enabled=True, time="06:55")
+        previous = run_at(self.now - timedelta(minutes=5), status="dismissed")
+        self.manager.runs[alarm_id] = deepcopy(previous)
+        self.manager._deliver = AsyncMock()
+        for new_time in ("06:59", "07:00"):
+            await self.manager.async_put(config(enabled=True, time=new_time),
+                self.manager.revision, alarm_id)
+            await self.manager._tick(self.now)
+            self.assertEqual(self.manager.runs[alarm_id], previous)
+        self.manager._deliver.assert_not_called()
+
+    async def test_rearm_save_failure_restores_run_settings_and_revision(self):
+        alarm_id = await self.create(enabled=True)
+        self.manager.runs[alarm_id] = run_at(self.now, status="dismissed",
+            error="Keep this error", music_blocked=True)
+        await self.manager._save()
+        previous = deepcopy(self.manager._data())
+        self.manager.store.fail = True
+        with self.assertRaises(OSError):
+            await self.manager.async_put(config(enabled=True, time="07:10"),
+                self.manager.revision, alarm_id)
+        self.assertEqual(self.manager._data(), previous)
+        self.assertEqual(self.manager.store.data, previous)
+
+    async def test_stale_time_edit_preserves_completed_run_and_other_alarms(self):
+        alarm_id = await self.create(enabled=True)
+        self.manager.runs[alarm_id] = run_at(self.now, status="dismissed", error="Old failure")
+        other_id = await self.create(name="Other", enabled=True)
+        self.manager.runs[other_id] = run_at(self.now, status="snoozed")
+        previous = deepcopy(self.manager._data())
+        with self.assertRaises(model.AlarmError):
+            await self.manager.async_put(config(enabled=True, time="07:10"),
+                self.manager.revision - 1, alarm_id)
+        self.assertEqual(self.manager._data(), previous)
+        await self.manager.async_put(config(enabled=True, time="07:10"),
+            self.manager.revision, alarm_id)
+        self.assertEqual(self.manager.runs[other_id], previous["runs"][other_id])
+        self.assertEqual(self.manager.alarms[other_id], previous["alarms"][1])
+
+    async def test_rearm_cannot_forget_uncertain_music_stop(self):
+        alarm_id = await self.create(enabled=True)
+        self.manager.runs[alarm_id] = run_at(self.now, status="dismissed",
+            music_attempt="uncertain-dispatch", music_blocked=True)
+        previous = deepcopy(self.manager._data())
+        with self.assertRaisesRegex(model.AlarmError, "Confirm the previous alarm has stopped"):
+            await self.manager.async_put(config(enabled=True, time="07:10"),
+                self.manager.revision, alarm_id)
+        self.assertEqual(self.manager._data(), previous)
+
+    async def test_rearm_waits_for_inflight_stop_cleanup(self):
+        alarm_id = await self.create(enabled=True)
+        self.manager.runs[alarm_id] = run_at(self.now, status="dismissed")
+        task = asyncio.create_task(asyncio.Event().wait())
+        self.manager.tasks[alarm_id] = task
+        previous = deepcopy(self.manager._data())
+        with self.assertRaisesRegex(model.AlarmError, "Confirm the previous alarm has stopped"):
+            await self.manager.async_put(config(enabled=True, time="07:10"),
+                self.manager.revision, alarm_id)
+        self.assertEqual(self.manager._data(), previous)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    async def test_snoozed_alarm_cannot_be_rearmed_by_edit(self):
+        alarm_id = await self.create(enabled=True)
+        self.manager.runs[alarm_id] = run_at(self.now, status="snoozed")
+        previous = deepcopy(self.manager._data())
+        with self.assertRaises(model.AlarmError):
+            await self.manager.async_put(config(enabled=True, time="07:10"),
+                self.manager.revision, alarm_id)
+        self.assertEqual(self.manager._data(), previous)
+
     async def test_disabled_alarm_does_not_ring(self):
         await self.create()
         self.manager._deliver = AsyncMock()

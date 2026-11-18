@@ -176,6 +176,18 @@ class AlarmManager:
             run = self.runs.get(alarm["id"])
             if run and run["status"] in ACTIVE:
                 raise AlarmError("Dismiss the active alarm before changing its settings")
+            now = dt_util.now()
+            due = local_occurrence(now.date(), alarm["time"], now.tzinfo)
+            rearm = bool(old and run and old["time"] != alarm["time"]
+                and run.get("date") == now.date().isoformat()
+                and due and due.timestamp() > now.timestamp())
+            if rearm:
+                task = self.tasks.get(alarm["id"])
+                if run.get("music_attempt") or (task is not None and not task.done()):
+                    raise AlarmError("Confirm the previous alarm has stopped before scheduling it again")
+                # Only an explicit move to a future time clears today's completed
+                # run. Unchanged saves/toggles must not replay a dismissed alarm.
+                self.runs.pop(alarm["id"])
             self.alarms[alarm["id"]] = alarm
             self.revision += 1
             try:
@@ -186,6 +198,8 @@ class AlarmManager:
                     self.alarms.pop(alarm["id"])
                 else:
                     self.alarms[alarm["id"]] = old
+                if rearm:
+                    self.runs[alarm["id"]] = run
                 raise
         self.changed()
         return alarm["id"]

@@ -31,3 +31,9 @@
 ## 2026-11-18 — 0.7.0b2 publication review
 - Reviewed the deployed phone-control and song-picker follow-up for the requested commit/push and refreshed its publication handoff. Excluded the unrelated `archive/services.yaml.bak` and runtime/cache artifacts.
 - Kept physical lock-screen/audio acceptance and the known Echo restart issue pending. No live changes, restart or stable release accompanied this publication task.
+
+## 2026-11-18 — same-day scheduling fix and Kitchen acceptance
+- Diagnosed same-day rescheduling suppression after a dismissed run; added explicit future-time re-arming with atomic rollback and cleanup/uncertain-stop protection. All 258 Python tests passed, including eight new scheduler regressions and five real MA-helper/FFmpeg tests.
+- Deployed only the tested `manager.py`, without a new backup at the user's request. Configuration validation passed; completed the approved Core restart, waited 65 seconds and verified integration loading with no active alarms.
+- The user confirmed the saved-alarm Test with Cenotaph/Jarvis, then successful scheduled Kitchen playback, notification Snooze with music-only resume, Dismiss and notification cleanup after dismissal elsewhere.
+- Updated project/deployment documentation for publication. Left earlier connection resets unexplained, lock-screen/screen-wake and broader reliability checks pending, MA migration unstarted, the Echo restart unfixed and issue #3 deferred. Left the unrelated archive file excluded.

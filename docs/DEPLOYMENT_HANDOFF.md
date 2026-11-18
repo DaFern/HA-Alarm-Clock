@@ -1,5 +1,42 @@
 # Morning handoff — 2026-11-18
 
+## Latest: same-day rescheduling deployed and Kitchen alarm cycle passed
+
+This section supersedes the older acceptance-pending statements below, which
+remain as deployment history. Live is 0.7.0b2 plus the scheduler fix on the same
+pinned DEV companion; no MA migration or stable release has occurred.
+
+- Previously, today's completed/dismissed run suppressed a new scheduled firing
+  even after the user changed its time. Saving a different future time now clears
+  that completed run and its stale error atomically with the settings save.
+- Unchanged saves, enable toggles and normal Snooze/Dismiss do not re-arm the
+  alarm. Active alarms, pending delivery cleanup and unconfirmed music stops
+  remain protected. Save failure restores settings, run and revision.
+- All **258 Python tests passed**, including five real MA-helper/FFmpeg tests
+  and eight new scheduler regression tests. Browser checks were not rerun for
+  this Python-only fix; the earlier b2 checks remain historical evidence.
+- Only live `manager.py` changed; its hash matched the tested project source.
+  HA configuration validation passed without errors or warnings. The approved
+  Core restart was followed by a 65-second wait and verified integration loading
+  with no active alarms. **No new backup was created**, at the user's request.
+- Before the scheduled retest, the user confirmed the saved-alarm Test played
+  Cenotaph and the Jarvis voice over the music on Kitchen. After deployment,
+  the user confirmed same-day rescheduling and a successful scheduled alarm,
+  actionable-notification Snooze with music-only resume, Dismiss stopping the
+  alarm, and notification cleanup after dismissal through another route.
+
+Earlier silent attempts/connection resets remain unexplained and are **not**
+fixed by clearing the same-day scheduling guard. The completed Kitchen cycle is
+one successful acceptance test, not proof of long-term reliability. Still pending:
+physical screen wake/lock-screen visibility, full-song completion in this scheduled
+flow, Sleep in, deadline escalation, busy-queue/takeover and restart-recovery checks.
+The intermittent Echo restart remains deferred/unfixed. Issue #3 tracks the
+separate, unimplemented timed music-volume ramp and sound-label changes.
+
+The successful pre-migration test requested by the user has passed. Migration
+still needs its own approval, build/install access and rollback plan; retain DEV,
+stable MA and their data. Keep issues #1/#2 open for the remaining acceptance gates.
+
 ## Deployed follow-up: song-picker feedback and phone controls
 
 The user confirmed search worked after selecting the correct MA speaker, but
