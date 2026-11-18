@@ -1,5 +1,52 @@
 # Morning handoff — 2026-11-18
 
+## Current status: 0.7.0b1 deployed; live acceptance pending
+
+This supersedes the older stop-point statements below. The user updated and
+restarted DEV on fork `7aab695417cea5d0fdf926620724cfd873ef1c22`, then explicitly
+approved HA-AlarmClock deployment and Core restart. DEV startup logged that
+exact commit; its HA library query succeeded and Kitchen was idle with an empty
+queue. Stable MA remained untouched.
+
+Nine integration source/documentation files were deployed, including the new
+`music.py`; all 19 installed files matched the project. No YAML changed. The
+previous runtime was backed up with verified hashes at:
+
+```text
+/data/v2/cache/opencode/household_alarms-before-0.7.0b1-20261118T012905Z
+```
+
+The backup contains `runtime/` and `deployment.json`. The separate Supervisor
+HA+DEV backup `a4c89d7b` also remains available. Configuration validation passed
+without errors or warnings. The approved Core restart call returned 502 as the
+connection went away; it was not retried. After waiting 65 seconds, the
+integration reported **loaded**, the alarm sensor showed zero enabled/active
+alarms, and Kitchen was idle. The live card rendered at both 390 and 1280 pixels
+without the experimental test panel.
+
+No saved settings, speaker selections or sleep switches were changed, no alarm
+was enabled, and no audio was played. This is a deployed **beta candidate**, not
+a published or fully accepted stable release. The local-app image remains
+unbuilt/uninstalled and the intermittent song/chapter restart remains unfixed.
+
+### Next: non-playing protocol-2 check
+
+The exposed tools cannot directly invoke custom HA WebSocket commands or click
+the card editor, so runtime protocol-2 capabilities/song search remain pending.
+
+1. Open **Jarvis Alarm → Edit**, leaving the saved alarm **off**.
+2. Enable Music in the unsaved draft and search for a song using the DEV MA
+   speaker. **Search songs** checks protocol 2 before reading library metadata;
+   it does not play audio or save anything.
+3. Report song results or the exact error; cancel the draft if not continuing.
+   An ordinary MA library service query is not this protocol-2 check.
+4. With explicit consent, save song/gain/delay while leaving the alarm off, then
+   use **Test**. Verify exact assistant voice, delay, full song, music-only Snooze,
+   Dismiss and Sleep in. Scheduled firing, deadline escalation, takeover and
+   restart recovery still need acceptance testing.
+
+Keep issue #2 open and keep an independent alarm for essential wake-ups.
+
 ## Approved follow-up: temporarily keep MA DEV
 
 After the original handoff, the user disabled **Start on boot** for stable MA

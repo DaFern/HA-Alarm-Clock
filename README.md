@@ -13,7 +13,10 @@ search/selection, separate background gain, and a 0–120-second voice delay.
 The briefing is attempted once; Snooze restarts the same song without speech.
 Existing schedules and speakers remain unchanged, with music off by default.
 
-**This is not a published stable release or a production deployment.** Music
+**This is not a published stable release.** The 0.7.0b1 candidate was deployed
+for verification on 2026-11-18, retaining DEV. The integration loaded and its
+card rendered at phone/desktop widths; no saved alarms were enabled or changed
+and no audio was played. Music
 requires the pinned protocol-2 MA companion; stock MA and the older DEV
 protocol-1 patch are not compatible with the scheduled-music API.
 
@@ -21,7 +24,9 @@ protocol-1 patch are not compatible with the scheduled-music API.
 - [Pinned MA build, installation gates and rollback](packaging/music_assistant/README.md)
 - [Upstream feature proposal](https://github.com/music-assistant/support/discussions/998#discussioncomment-19695063)
 
-The MA image still needs building and live acceptance testing. Leave DEV and
+The separate MA image still needs building. DEV is now pinned to
+`DaFern/server@7aab695417cea5d0fdf926620724cfd873ef1c22`; card-driven protocol-2
+song search and audible/scheduled acceptance remain pending. Leave DEV and
 its data installed until the replacement is verified. The intermittent Echo
 song/chapter restart remains unreproduced and unfixed.
 

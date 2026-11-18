@@ -1,6 +1,6 @@
 # HA-AlarmClock 0.7.0b1 — project release candidate
 
-## Scheduled selected-song alarms (not deployed)
+## Scheduled selected-song alarms (deployed candidate; acceptance pending)
 
 Each alarm now has an opt-in **Music** section: select its MA speaker, search
 that server's song library, choose a song, and save its background gain (1–30%)
@@ -40,7 +40,9 @@ remain for compatibility but are not the scheduled alarm API.
 ### Required companion and release boundary
 
 Stock MA and the previously published protocol-1 fork are **not sufficient**.
-Scheduled playback requires the protocol-2 companion prepared under
+Scheduled playback requires a protocol-2 companion. The temporary DEV route is
+now pinned to `DaFern/server@7aab695417cea5d0fdf926620724cfd873ef1c22`.
+The separate local-app recipe is prepared under
 [`packaging/music_assistant`](../../packaging/music_assistant/README.md).
 It has a separate app identity/data directory and an exact upstream image digest,
 with hash-guarded source patching at build time and no startup Git installation.
@@ -50,10 +52,11 @@ overlay are rejected rather than changed or replaced automatically.
 
 The user confirmed a full-song playthrough, simultaneous briefing, Dismiss and
 Snooze on the earlier DEV prototype. **The intermittent Echo song/chapter restart
-is not reproduced or fixed.** The new scheduled protocol/package still requires
-an actual image build and authenticated/live acceptance tests. Nothing in this
-candidate has been deployed, installed, restarted or released. Source publication
-does not change those deployment boundaries; see the repository's
+is not reproduced or fixed.** The 0.7.0b1 HA candidate was deployed and verified
+loaded/rendering on 2026-11-18, retaining DEV and leaving saved alarms unchanged
+and off. No audio was played. Card-driven protocol-2 song search and audible/
+scheduled acceptance remain pending. The local-app image is unbuilt/uninstalled
+and no stable release was published; see the repository's
 [`morning handoff`](../../docs/DEPLOYMENT_HANDOFF.md) for the outstanding work.
 Keep an independent alarm for essential wake-ups.
 
