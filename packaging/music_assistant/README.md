@@ -38,7 +38,7 @@ do not constitute authenticated API startup or a physical ramp test.
 ### Temporary compatible DEV route
 
 The earlier protocol-2 source (without the ramp extension) was published in the MA fork at
-`DaFern/server@7aab695417cea5d0fdf926620724cfd873ef1c22`.
+`DaFern/music-assistant-alarm-clock-server@7aab695417cea5d0fdf926620724cfd873ef1c22`.
 The user approved retaining DEV temporarily, avoiding the local-package transfer
 until a convenient migration window. Back up HA+DEV before changing DEV's
 `server_repo`, verify that exact build and its protocol before deploying the HA
