@@ -1,7 +1,7 @@
 """Constants for HA-AlarmClock."""
 
 DOMAIN = "household_alarms"
-VERSION = "0.7.0b2"
+VERSION = "0.7.0b3"
 EVENT_CHANGED = f"{DOMAIN}_changed"
 CARD_URL = f"/{DOMAIN}/household-alarms-card.js?v={VERSION}"
 STORAGE_VERSION = 1

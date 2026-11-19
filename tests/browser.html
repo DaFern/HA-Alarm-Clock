@@ -118,6 +118,9 @@
     }) && q('[data-field="speaker"]').required && !q('[data-field="calendar"]').required);
     test("duplicate enable checkbox was removed", !q('[data-field="enabled"]'));
     test("generic form has no preset family or assistant", !q('#people option') && !card._draft.assistant_id && !card._draft.weather);
+    await mode('message','greeting');
+    test('Simple greeting can be selected from Off before choosing an assistant', q('[data-mode-group="message"][aria-pressed="true"]').dataset.mode==='greeting' && !!q('[data-field="assistant_id"]') && !card._draft.assistant_id);
+    await mode('message','off');
     test("each advanced section starts collapsed", ["wake-limits","phone-controls","help-alerts","sleep-switch"].every((id) => !q(`[data-section="${id}"]`).open));
     test('collapsed sections summarize current settings', q('[data-summary="wake-limits"]').textContent.includes('5 minutes') && q('[data-summary="phone-controls"]').textContent==='Phone controls off' && q('[data-summary="help-alerts"]').textContent==='Help alerts off' && q('[data-summary="sleep-switch"]').textContent==='No sleep switch selected');
     test('latest wake-up time appears once under wake-up limits', qAll('[data-field="deadline"]').length===1 && q('[data-field="deadline"]').closest('[data-section="wake-limits"]'));
