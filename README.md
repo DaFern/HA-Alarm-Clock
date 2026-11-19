@@ -78,7 +78,7 @@ protocol-1 patch are not compatible with the scheduled-music API.
 - [Upstream feature proposal](https://github.com/music-assistant/support/discussions/998#discussioncomment-19695063)
 
 The separate MA image still needs building. DEV is now pinned to
-`DaFern/server@7aab695417cea5d0fdf926620724cfd873ef1c22`. Song search and one
+`DaFern/music-assistant-alarm-clock-server@7aab695417cea5d0fdf926620724cfd873ef1c22`. Song search and one
 scheduled audible alarm cycle have passed user testing, not long-term reliability
 acceptance. Screen wake/lock-screen visibility, Sleep in, deadline escalation,
 takeover and restart recovery still need live checks. Earlier connection resets
