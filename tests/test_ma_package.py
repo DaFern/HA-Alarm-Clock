@@ -68,9 +68,13 @@ class PackageTests(unittest.TestCase):
         source = (ROOT / 'prototypes/ma_one_shot/alarm_commands.py.txt').read_text()
         tree = ast.parse('class Host:\n' + source)
         methods = [node for node in tree.body[0].body if isinstance(node, ast.AsyncFunctionDef)]
-        self.assertEqual(len(methods), 4)
-        for method in methods:
+        public = [method for method in methods if not method.name.startswith('_')]
+        self.assertEqual({method.name for method in public},
+                         {'alarm_capabilities', 'alarm_start', 'alarm_control', 'alarm_volume'})
+        for method in public:
             self.assertTrue(any('Scope.QUEUES_CONTROL' in ast.unparse(node) for node in method.decorator_list))
+        helper = next(method for method in methods if method.name == '_alarm_release')
+        self.assertFalse(helper.decorator_list)
 
     @unittest.skipUnless(sys.version_info >= (3, 14) and Path('/data/v2/cache/opencode/ma-native-runtime/server').is_dir(),
                          'Requires Python 3.14 (matching pinned MA) and pristine source checkout')

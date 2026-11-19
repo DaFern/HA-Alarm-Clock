@@ -12,7 +12,7 @@ Standard tone and spoken alarms use Home Assistant and can run without Music Ass
 
 The current scheduled-song mode, including music-only alarms and voice over music, requires the project's patched Music Assistant server with protocol 2. Keep the Music option off on stock Music Assistant while upstream support is pending. The patched server is optional for users who want to test scheduled music now.
 
-## Current candidate: 0.7.0b5
+## Current candidate: 0.7.0b6 (source only)
 
 ### Issue #4 follow-up: next dates and preserved music queues
 
@@ -21,14 +21,25 @@ labels and refreshes them across local midnight. Disabled alarms show
 **Next: Not scheduled**.
 
 Scheduled music and confirmed saved-alarm Tests now require companion protocol 2
-with `preserve_queue`. The updated companion appends one uniquely owned alarm
-item, starts it immediately even over existing playback, and preserves the prior
-queue items in order. Snooze resumes that same item without speech; Dismiss stops
-only the owned session and removes only the alarm item. It does not automatically
-resume the interrupted user music. Repeat, Autoplay, grouped speakers and ambient
-overlays remain unsupported and are reported before playback.
+with `restore_playback` (in addition to `preserve_queue`). Each alarm segment
+captures the currently playing queue item and position, then adds/starts its own
+unique alarm item. Snooze and Dismiss remove only that alarm item and resume the
+interrupted music if its item still exists. Stopped/paused queues stay stopped.
+Every snooze wake-up captures current playback afresh, rather than restoring the
+first ring's stale track later. User queue edits and same-song copies survive.
+Playback takeover prevents stale stop/restore; a protected item currently being
+used by the user is not deleted. A missing/deleted interrupted item is not recreated.
 
-**Deployment gate:** the previously pinned DEV companion lacks `preserve_queue`.
+**Repeat morning message after snooze** defaults off, appears under Snooze only
+for spoken modes, and applies to scheduled alarms and confirmed saved-alarm
+Tests. When enabled, it regenerates the configured message once per intentional
+snooze wake-up. Ordinary song loops and same-ring retries/restarts never repeat
+speech. Restored music is user-owned: changing the sleep entity does not stop it.
+The existing optional turn-sleep-switch-off-on-dismissal behavior is unchanged.
+Repeat, Autoplay, grouped speakers and ambient overlays remain unsupported.
+
+**Deployment gate:** the installed 0.7.0b5/`46b4183` pair is unchanged and lacks
+the new `restore_playback` contract.
 Install and verify the updated companion before deploying the new integration;
 otherwise scheduled music will deliberately report an incompatible companion.
 The changes below are deployment history, not evidence of this queue behavior
@@ -60,7 +71,8 @@ needed for this follow-up; it still uses protocol 2.
 
 The project contains opt-in scheduled Music Assistant songs, per-alarm library
 search/selection, separate background gain, and a 0–120-second voice delay.
-The briefing is attempted once; Snooze restarts the same song without speech.
+By default the briefing is attempted once; the optional snooze-repeat setting
+allows one new message on each snooze wake-up.
 Existing schedules and speakers remain unchanged, with music off by default.
 
 **This is not a published stable release.** The deployed 0.7.0b2 candidate now

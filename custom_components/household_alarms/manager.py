@@ -22,7 +22,7 @@ from .music import AlarmMusic
 from .notifications import AlarmNotifications, phone_targets
 from .model import (
     AlarmError, DEFAULTS, deadline_at, elapsed_after, finite_number, is_school_day, include_event_title, speech_wait_seconds,
-    local_occurrence, matches, snooze_until, validate, volume,
+    local_occurrence, matches, morning_message_due, snooze_until, validate, volume,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -682,7 +682,7 @@ class AlarmManager:
             if alarm["music_enabled"] and not test:
                 await AlarmMusic(self, alarm, run).play()
                 return
-            first_ring = run["cycles"] == 0 and not run.get("escalated") and not run.get("briefing_attempted", False)
+            first_ring = morning_message_due(alarm, run)
             wants_speech = first_ring and bool(alarm["assistant_id"] or alarm["briefing_enabled"] or alarm["tone"] == "none")
             pipeline = None
             if wants_speech:
@@ -690,10 +690,12 @@ class AlarmManager:
                     async with self.lock:
                         if self.runs.get(alarm_id) is not run or run["status"] not in ACTIVE:
                             return
-                        # Persist before generation/playback. An interrupted first
-                        # ring must not repeat the briefing after snooze or restart.
+                        # Persist the snooze ordinal before generation/playback;
+                        # retries/restarts within a ring must not repeat speech.
                         previous_attempt = run.get("briefing_attempted")
+                        previous_snooze = run.get("briefing_snooze")
                         run["briefing_attempted"] = True
+                        run["briefing_snooze"] = run.get("snoozes", 0)
                         try:
                             await self._save()
                         except Exception:
@@ -701,6 +703,10 @@ class AlarmManager:
                                 run.pop("briefing_attempted", None)
                             else:
                                 run["briefing_attempted"] = previous_attempt
+                            if previous_snooze is None:
+                                run.pop("briefing_snooze", None)
+                            else:
+                                run["briefing_snooze"] = previous_snooze
                             raise
                 try:
                     pipeline = resolve_assistant(self.hass, alarm["assistant_id"], voice=True)

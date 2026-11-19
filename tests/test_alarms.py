@@ -98,6 +98,24 @@ def run_at(start, **overrides):
 
 
 class RuleTests(unittest.TestCase):
+    def test_message_repeat_defaults_off_is_strict_boolean_and_is_per_snooze(self):
+        alarm = model.validate(config())
+        self.assertFalse(alarm['repeat_message_after_snooze'])
+        with self.assertRaises(model.AlarmError):
+            model.validate(config(repeat_message_after_snooze='true'))
+        run = {'cycles': 0, 'snoozes': 0}
+        self.assertTrue(model.morning_message_due(alarm, run))
+        run.update(cycles=1, briefing_attempted=True, briefing_snooze=0, snoozes=1)
+        self.assertFalse(model.morning_message_due(alarm, run))
+        alarm['repeat_message_after_snooze'] = True
+        self.assertTrue(model.morning_message_due(alarm, run))
+        run['briefing_snooze'] = 1
+        self.assertFalse(model.morning_message_due(alarm, run))
+        run['snoozes'] = 2
+        self.assertTrue(model.morning_message_due(alarm, run))
+        alarm['snooze_enabled'] = False
+        self.assertFalse(model.morning_message_due(alarm, run))
+
     def test_sleep_dismissal_defaults_off_and_requires_linked_switch(self):
         self.assertFalse(model.validate(config())["clear_sleep_on_dismiss"])
         self.assertFalse(model.validate(config(clear_sleep_on_dismiss=True))["clear_sleep_on_dismiss"])
@@ -533,6 +551,24 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sum(c[:2] == ("tts", "speak") for c in self.hass.services.calls), 1)
         tones = [c[2]["media_content_id"] for c in self.hass.services.calls if c[:2] == ("media_player", "play_media")]
         self.assertEqual(tones, ["media-source://household_alarms/chime"])
+
+    async def test_optional_spoken_message_repeats_once_per_snooze_not_per_ring_or_reload(self):
+        alarm_id = await self.create(assistant_id="assistant-test", briefing_enabled=True,
+                                    tone="none", repeat_message_after_snooze=True)
+        self.manager.runs[alarm_id] = run_at(self.now)
+        for snooze in range(3):
+            self.manager.runs[alarm_id]["snoozes"] = snooze
+            await self.fast_delivery(alarm_id)
+            self.assertEqual(self.manager.store.data["runs"][alarm_id]["briefing_snooze"], snooze)
+            await self.fast_delivery(alarm_id)
+        self.assertEqual(sum(c[:2] == ("tts", "speak") for c in self.hass.services.calls), 3)
+        other = AlarmManager(self.hass)
+        other.store.data = deepcopy(self.manager.store.data)
+        await other.async_load()
+        other._speak = AsyncMock()
+        other._play_tone = AsyncMock()
+        await other._deliver(alarm_id)
+        other._speak.assert_not_awaited()
 
     async def test_cancelled_first_ring_never_repeats_briefing_after_restart(self):
         alarm_id = await self.create(assistant_id="assistant-test", briefing_enabled=True)

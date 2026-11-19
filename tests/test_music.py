@@ -256,6 +256,40 @@ class ScheduledMusicTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(args['music_gain'], .25)
         self.assertEqual(self.count('alarm_volume'), 0)
 
+    async def test_scheduled_repeated_snoozes_use_fresh_segments_and_optional_messages(self):
+        for repeat in (False, True):
+            with self.subTest(repeat=repeat):
+                self.calls.clear()
+                self.alarm['repeat_message_after_snooze'] = repeat
+                self.run.clear()
+                self.run.update(fixture.run_at(datetime.now(timezone.utc)))
+                self.manager.async_briefing = AsyncMock(return_value='Configured morning message')
+                for ordinal in range(3):
+                    self.run.update(status='ringing', snoozes=ordinal)
+                    self.delivery = music.AlarmMusic(self.manager, self.alarm, self.run,
+                        resolver=self.resolver, server_resolver=self.server_resolver)
+                    await self.start()
+                    self.assertEqual(self.count('alarm_start'), ordinal + 1)
+                    self.run['status'] = 'snoozed'
+                    self.task.cancel()
+                    await asyncio.gather(self.task, return_exceptions=True)
+                    self.assertIsNone(self.run.get('music_attempt'))
+                starts = [args for name, args in self.calls if name.endswith('alarm_start')]
+                self.assertEqual(len({s['run_id'] for s in starts}), 3)
+                self.assertEqual([bool(s['message']) for s in starts],
+                                 [True, repeat, repeat])
+                self.assertEqual(self.count('alarm_control', 'snooze'), 3)
+                self.assertEqual(self.manager.async_briefing.await_count, 3 if repeat else 1)
+
+    async def test_sleep_switch_change_during_snooze_never_stops_restored_music(self):
+        self.alarm.update(enabled=True, bedtime_entity='input_boolean.bedtime')
+        self.run.update(status='snoozed', music_attempt=None)
+        self.hass.states.set('input_boolean.bedtime', 'off')
+        before = list(self.calls)
+        await self.manager._tick(datetime.now(timezone.utc))
+        self.assertEqual(self.run['status'], 'dismissed')
+        self.assertEqual(self.calls, before)
+
     async def test_ramp_requires_feature_before_message_or_playback(self):
         self.alarm['music_ramp_enabled'] = True
         self.manager.async_briefing = AsyncMock()
@@ -304,6 +338,7 @@ class ScheduledMusicTests(unittest.IsolatedAsyncioTestCase):
         async def test_command(name, **kwargs):
             if name.endswith('alarm_start'):
                 self.calls.append((name, deepcopy(kwargs)))
+                self.volume_level = kwargs['volume_level']
                 return {'protocol': 2, 'status': 'playing'}
             return await original_command(name, **kwargs)
         self.client.send_command = test_command
@@ -323,15 +358,67 @@ class ScheduledMusicTests(unittest.IsolatedAsyncioTestCase):
                 tester.event.set()
                 await self.settle(lambda: tester.session['status'] == 'playing')
                 restarted = next(args for name, args in self.calls[before:]
-                    if name.endswith('alarm_control') and args['action'] == 'restart')
+                    if name.endswith('alarm_start'))
                 self.assertEqual(restarted['volume_level'], self.alarm['start_volume'])
-                self.assertEqual(self.count('alarm_start'), 1)
+                self.assertEqual(restarted['message'], '')
+                starts = [args for name, args in self.calls if name.endswith('alarm_start')]
+                self.assertNotEqual(starts[0]['run_id'], starts[1]['run_id'])
+                self.assertEqual(self.count('alarm_start'), 2)
                 self.assertEqual(self.volume_level, 20)
         finally:
             if tester.active:
                 await tester.async_action(tester.session['id'], 'dismiss')
                 await tester.task
         self.assertIsNone(self.manager.store.data)
+
+    async def test_saved_test_repeated_snoozes_refresh_segments_and_message_setting(self):
+        tester = self.manager.music_tests
+        tester.resolver = self.resolver
+        self.manager.runs = {}
+        now = [0]
+        tester.clock = lambda: now[0]
+        original = self.command
+        async def test_command(name, **kwargs):
+            if name.endswith('alarm_start'):
+                self.calls.append((name, deepcopy(kwargs)))
+                return {'protocol': 2, 'status': 'playing'}
+            return await original(name, **kwargs)
+        self.client.send_command = test_command
+        for repeat in (False, True):
+            self.calls.clear()
+            self.alarm['repeat_message_after_snooze'] = repeat
+            self.manager.async_briefing = AsyncMock(return_value='Configured message')
+            with patch.object(fixture.load('ma_audio'), 'resolve_server_id', self.server_resolver):
+                try:
+                    await tester.async_start_selected(self.alarm)
+                    await self.settle(lambda: tester.session['status'] == 'playing')
+                    for _ in range(2):
+                        await tester.async_action(tester.session['id'], 'snooze')
+                        await self.settle(lambda: tester.session['status'] == 'snoozed')
+                        self.assertFalse(tester.submitted)
+                        before = len(self.calls)
+                        tester.event.set()
+                        for _ in range(10):
+                            await asyncio.sleep(0)
+                        self.assertEqual(len(self.calls), before)
+                        now[0] += tester.session['snooze_seconds']
+                        tester.event.set()
+                        await self.settle(lambda: tester.session['status'] == 'playing')
+                    starts = [args for name, args in self.calls if name.endswith('alarm_start')]
+                    self.assertEqual(len({s['run_id'] for s in starts}), 3)
+                    self.assertEqual([bool(s['message']) for s in starts], [True, repeat, repeat])
+                    self.assertEqual(self.count('alarm_control', 'restart'), 0)
+                    # Dismiss while snoozed must not stop the resumed user music.
+                    await tester.async_action(tester.session['id'], 'snooze')
+                    await self.settle(lambda: tester.session['status'] == 'snoozed')
+                    stops = self.count('alarm_control', 'stop')
+                    await tester.async_action(tester.session['id'], 'dismiss')
+                    await tester.task
+                    self.assertEqual(self.count('alarm_control', 'stop'), stops)
+                finally:
+                    if tester.active:
+                        await tester.async_action(tester.session['id'], 'dismiss')
+                        await tester.task
 
     async def test_busy_queue_never_generates_or_dispatches(self):
         self.ready = False

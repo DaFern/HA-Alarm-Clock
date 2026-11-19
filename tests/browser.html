@@ -34,6 +34,7 @@
   defaults.schedule_enabled=false; defaults.schedule_calendars=[];
   defaults.briefing_words=100; defaults.schedule_include=''; defaults.schedule_exclude='';
   defaults.clear_sleep_on_dismiss=false;
+  defaults.repeat_message_after_snooze=false;
   Object.assign(defaults,{music_enabled:false,music_track:'',music_track_name:'',music_server:'',music_gain:25,speech_delay:0});
   Object.assign(defaults,{phone_enabled:false,phone_service:'',phone_wake_screen:true});
   Object.assign(defaults,{music_ramp_enabled:false,music_ramp_step:5,music_ramp_seconds:30});
@@ -127,9 +128,17 @@
     }) && q('[data-field="speaker"]').required && !q('[data-field="calendar"]').required);
     test("duplicate enable checkbox was removed", !q('[data-field="enabled"]'));
     test("generic form has no preset family or assistant", !q('#people option') && !card._draft.assistant_id && !card._draft.weather);
+    test('message repeat is hidden when morning message is off', !q('[data-field="repeat_message_after_snooze"]'));
     await mode('message','greeting');
     test('Simple greeting can be selected from Off before choosing an assistant', q('[data-mode-group="message"][aria-pressed="true"]').dataset.mode==='greeting' && !!q('[data-field="assistant_id"]') && !card._draft.assistant_id);
     test('assistant selector shows its placeholder while no assistant is selected', q('[data-field="assistant_id"]').value==='' && q('[data-field="assistant_id"] option:checked').textContent==='Choose an assistant');
+    test('spoken snooze message repeat defaults off under Snooze', q('[data-field="repeat_message_after_snooze"]').closest('[data-section="wake-limits"]') && !q('[data-field="repeat_message_after_snooze"]').checked);
+    await set('repeat_message_after_snooze',true);
+    await set('snooze_enabled',false);
+    test('message repeat is hidden with snooze disabled and preserves its draft choice', !q('[data-field="repeat_message_after_snooze"]') && card._draft.repeat_message_after_snooze);
+    await set('snooze_enabled',true);
+    test('message repeat returns when snooze is enabled again', q('[data-field="repeat_message_after_snooze"]').checked);
+    await set('repeat_message_after_snooze',false);
     await mode('message','off');
     test("each advanced section starts collapsed", ["wake-limits","phone-controls","help-alerts","sleep-switch"].every((id) => !q(`[data-section="${id}"]`).open));
     test('collapsed sections summarize current settings', q('[data-summary="wake-limits"]').textContent.includes('5 minutes') && q('[data-summary="phone-controls"]').textContent==='Phone controls off' && q('[data-summary="help-alerts"]').textContent==='Help alerts off' && q('[data-summary="sleep-switch"]').textContent==='No sleep switch selected');

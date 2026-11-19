@@ -47,3 +47,8 @@
 - Published timezone-aware Next labels and queue-preserving companion changes in project `79ac934` and existing server fork `46b4183`. Passed 291 Python tests including native FFmpeg tests, browser checks at four widths, Ruff and targeted companion mypy.
 - Created HA+DEV backup `ffa20773`, updated DEV's exact source pin and deployed matching HA 0.7.0b5 after the active test alarm cleared. Verified deployed hashes, configuration validation, recovery and live phone/desktop card rendering; played no new test audio.
 - Created and verified `DaFern/music-assistant-alarm-clock-app`; verified `DaFern/music-assistant-alarm-clock-server` was already an upstream fork. Left app installation/migration and physical queue acceptance pending; retained earlier Plex/playback errors for follow-up.
+
+## 2026-11-19 — source-only alarm restoration lifecycle
+- Implemented per-ring interrupted-track/position capture, unique-item cleanup and guarded Snooze/Dismiss restoration. Snooze wake-ups captured current music afresh; queue edits/copies and playback takeover were preserved.
+- Added default-off repeat-message-after-snooze across settings, UI, scheduled alarms and saved Tests, with once-per-snooze attempt persistence. Retained sleep-switch dismissal behavior without adding control of restored music.
+- Passed 309 MA-native Python tests with no skips; system Python passed 303 with 6 skips. Browser checks passed 157/157/156/156 at 320/390/620/1280px; companion Ruff/mypy and generated/published AST checks passed. Published companion `aabb3e2` and documented the matching 0.7.0b6 deployment steps. Left deployment, restarts, configured source pins and physical acceptance unchanged.

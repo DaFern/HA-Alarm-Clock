@@ -1,4 +1,4 @@
-# HA-AlarmClock 0.7.0b5 — candidate
+# HA-AlarmClock 0.7.0b6 — source-only candidate
 
 ## Issue #4: next occurrence and queue behavior
 
@@ -7,14 +7,33 @@ including DST and year boundaries: **Next:** Today at 10:53, Tomorrow at 9:00,
 or 23/11/26 at 9:00. Disabled alarms show Not scheduled.
 
 Music alarms and the confirmed saved-alarm Test require companion protocol 2
-with `preserve_queue`. They append a unique alarm item and start it immediately,
-preserving existing queue tracks and their order. Snooze reuses that item without
-speech. Dismiss stops only the still-owned session and removes only its item;
-it does not resume the previous song automatically. Later user playback is not
-stopped. Repeat, Autoplay, grouping and ambient overlays still block playback.
+with `preserve_queue` and `restore_playback`. Each ring segment captures the
+currently playing queue-item ID and playback position, then starts its own
+unique alarm item immediately. Snooze and Dismiss remove only that alarm item,
+preserve the current user-edited queue and resume the interrupted item at its
+saved position if still present. With no prior playing music, playback stays
+stopped (including queues that were paused). No old queue snapshot is restored.
+Every snooze wake-up is a fresh segment: its next Snooze/Dismiss restores the
+music playing at that wake-up, not the first ring's music. User-added copies of
+the same song are never identified or removed by URI.
+
+A playback takeover invalidates stop/restore authority. Only a safe, noncurrent,
+nonbuffered stale alarm item can be removed; an item reused by the user's active
+playback is left alone. Repeated stop requests cannot stop already restored music,
+and an uncertain restore is not retried blindly. No new playback is started after
+MA loses its runtime ownership state.
+
+**Repeat morning message after snooze** defaults off and is shown under Snooze
+only while snooze and a spoken mode are enabled. It regenerates the configured
+message once on each intentional snooze wake-up when enabled; ordinary loops,
+same-ring retries and HA reload/restart do not rearm it. The same setting applies
+to confirmed saved-alarm Tests and nonmusic spoken alarms.
+Restored music is not controlled by the sleep entity. Optional turn-sleep-switch-
+off-on-dismissal behavior is retained; users can add their own music automations.
+Repeat, Autoplay, grouping and ambient overlays still block playback.
 Failures appear beside the alarm under **Playback failed — details**.
 
-The previous deployed companion does not implement `preserve_queue`. Upgrade
+The previous deployed companion does not implement `restore_playback`. Upgrade
 the companion first; the integration rejects old companions rather than silently
 using incompatible queue behavior. Physical queue-state acceptance remains pending.
 The sections below include older deployed/test history.
@@ -103,7 +122,8 @@ replaying the message. Background music gain remains a separate mixing setting.
 The ramp defaults off; existing alarm settings and legacy per-ring increases stay
 unchanged. Tone alarms retain their repeat behaviour with explicit tone-specific
 labels. With the ramp on, every resumed ring starts at Starting volume; Snooze
-stops its timer, then starts a fresh timer and music-only ring. Natural song loops
+stops its timer; its wake-up starts a fresh timer and ring, with speech only if
+the snooze-repeat option is enabled. Natural song loops
 retain the current level. Deadline escalation still takes precedence at Maximum
 volume. Dismiss, Sleep in and takeover cancel future increases through the normal
 playback lifecycle. A manual volume change detected by MA suspends increases for
@@ -137,25 +157,29 @@ match a different server, even if it reuses the same speaker entity id. Existing
 alarms keep their schedules/speakers and default to music **off**.
 
 Music replaces the tone. It plays under the selected named HA assistant's exact
-voice/language, once on the first ring, and continues afterwards. Delay is music
+voice/language, on the first ring and optionally on snooze wake-ups, and continues afterwards. Delay is music
 playback time, not a sleep before starting the song. Message/TTS preparation
 happens before playback. A short song can end before delayed speech finishes.
 Missing assistant voices warn and leave music playing; tone-only legacy alarms
 retain their existing fallback behavior.
 
-Snooze stops playback, uses the normal saved snooze minutes/deadline/limit, and
-starts the **same selected song from the beginning without speech**. Dismiss and
-Sleep in stop the owned queue; their normal sleep-switch behavior remains intact.
+Snooze removes only the alarm item, resumes interrupted music when available, and
+uses the saved snooze minutes/deadline/limit. At wake-up a new alarm segment
+captures current music and starts the selected alarm song from the beginning;
+speech is controlled by the snooze-repeat option. Dismiss and Sleep in release
+only the owned alarm segment and restore interrupted music. Their normal
+sleep-switch behavior remains intact.
 Music repeats at song end (two-second polling, not gapless), rather than at the
 tone repeat interval. Hardware volume is selected at the start of each ring;
 the deadline can interrupt and escalate it. The background gain stays separate.
 
-The first speech attempt and each music dispatch id are saved before generation
+Each permitted speech attempt (initial ring or opted-in snooze ordinal) and each music dispatch id are saved before generation
 or playback. After an unclean restart, HA may reattach only to that exact owned
 session, never blindly start a replacement. Uncertain starts/stops and external
 takeover block further automatic playback for that run and surface an error.
 An explicit dismissal can retry a guarded stop; otherwise check the speaker
-manually. Successful clean shutdown stops playback; later resumption is music-only.
+manually. Successful clean shutdown releases the owned alarm segment and restores
+interrupted music. It does not authorize replay of an already attempted message.
 
 The old **Experimental music test** panel is removed. The normal saved alarm
 **Test** button confirms speaker, song, volume, gain and delay, then offers
@@ -335,9 +359,10 @@ sleep switch. The voice provider receives the spoken text. The conversation
 assistant retains its usual permissions during preview as well as real alarms;
 the prompt's request not to take actions is not a security boundary.
 
-The briefing is attempted only on the first ring. This is persisted before
-generation/playback so an interruption, snooze or restart does not repeat the
-message. Subsequent rings use the chosen tone, or Chime for a voice-only alarm.
+By default the briefing is attempted only on the first ring. The optional
+snooze-repeat setting permits one new attempt per snooze ordinal. Each attempt
+is persisted before generation/playback so an interruption or restart within
+the same ring cannot repeat it. Other rings use the chosen tone, or Chime for a voice-only alarm.
 If voice-only speech fails, Chime is attempted immediately and a warning is shown.
 
 These changes were checked offline against the HA 2026.11.1 pipeline/TTS API
@@ -482,8 +507,8 @@ agent with tool access disabled if hard separation from device control is requir
 No existing JARVIS, F.R.I.D.A.Y. or other agent configuration is changed.
 
 The initial ringing sound is sent independently of briefing generation. If AI
-generation fails, the standard wake-up greeting is used. Only the first ring
-attempts speech; repeats and deadline escalation use tones. A failure in both speaker playback and notification
+generation fails, the standard wake-up greeting is used. The initial ring and
+opted-in snooze wake-ups attempt speech; ordinary repeats use tones. A failure in both speaker playback and notification
 delivery cannot be made reliable by software; maintain a separate critical alarm.
 
 The card's spoken preview may contact the selected assistant and voice provider

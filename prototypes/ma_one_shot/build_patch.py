@@ -53,6 +53,8 @@ def candidates(checkout):
 
     rel = "music_assistant/controllers/player_queues/controller.py"
     text = replace_once(original[rel],
+        "    committed_index,\n", "    build_queue_item,\n    committed_index,\n")
+    text = replace_once(text,
         "        self._check_player_permission(queue_id)\n        await self._handle_stop(queue_id)",
         "        self._check_player_permission(queue_id)\n        self.mass.streams.audio.briefings.cancel_queue(queue_id)\n        await self._handle_stop(queue_id)")
     text = replace_once(text,

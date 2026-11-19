@@ -56,9 +56,13 @@ The adapter uses MA's own `ComplexFilterInput`, `ComplexFilter` and
 
 MA still owns provider playback and output encoding. The mixer does not choose
 songs or call `play_announcement`. The protocol-2 scheduled-alarm and saved Test
-commands advertise `preserve_queue`: append a unique alarm item, preserve the
-previous items/order and start the new item immediately. Owned Dismiss removes
-only that item; Snooze reuses it without a second briefing. Enqueue attempts are
+commands advertise `preserve_queue` and `restore_playback`: capture the currently
+playing item and position and append/start a unique alarm item. Owned Snooze and
+Dismiss remove only that item and resume the captured playing item if still present.
+Snooze wake-ups use new segment IDs and capture current music afresh. The live
+queue is never replaced by an old snapshot. Same-song copies survive; takeover
+prevents stale stop/restoration. HA optionally generates one new morning message
+on each snooze wake-up, with separate replay protection per segment. Enqueue attempts are
 tombstoned independently of speech claims, and controls reject a later user's
 current item or session. The protocol-1 experimental manual-test commands load
 one explicitly selected library track into an **empty** queue and set a bounded

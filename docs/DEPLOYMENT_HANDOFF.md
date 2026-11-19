@@ -1,5 +1,56 @@
 # Morning handoff — 2026-11-18
 
+## Current source-only candidate: 0.7.0b6 queue lifecycle
+
+Companion source is published on `ha-alarmclock-2.10.12` in
+`DaFern/music-assistant-alarm-clock-server` at
+`aabb3e2af2e6c0a3e27b6af8dd1cc4b3c18c660d`.
+The matching integration is 0.7.0b6 and requires protocol 2 with
+`restore_playback`, so old companions are rejected before alarm playback.
+No deployment, service restart or configured source-pin change was performed.
+
+Each ring segment captures the currently playing item and position. Snooze and
+Dismiss remove only its unique alarm item and resume its interrupted music if
+still present. Every snooze wake-up captures current playback afresh. Queue
+edits/copies survive; stopped/paused queues are not started, deleted interrupted
+items are not recreated, and user takeover prevents stale stop/restoration.
+A safe stale alarm item can be removed without stopping the user's playback;
+an item now used by current/buffered playback is left alone.
+Duplicate stop responses cannot stop restored music; uncertain restoration
+dispatches are not retried. Natural song loops remain message-free.
+The default-off **Repeat morning message after snooze** option permits one new
+configured-message attempt per snooze ordinal, including saved-alarm Tests.
+Changing the sleep entity does not stop restored music. Optional turn-sleep-
+switch-off-on-dismissal remains intact.
+
+Exact verification:
+
+- MA-native Python 3.14: **309 tests, all passed, zero skipped**, including the
+  real MA-helper/FFmpeg and complete generated-package checks.
+- System Python: **309 discovered, 303 passed, 6 environment-gated skips**.
+- Chromium at 320/390/620/1280px: **157/157/156/156 passed**.
+- Companion Ruff and targeted mypy: passed for the generated queue controller
+  and one-shot helper (2 source files). All 4 generated/published source ASTs
+  matched. JavaScript syntax, manifest JSON and Git diff checks passed.
+- Negative-case tests intentionally logged simulated alarm failures; no
+  physical speaker or authenticated playback acceptance test was run.
+
+Next deployment step, **not performed**:
+
+1. Obtain deployment consent and choose a window with no active alarm. Back up
+   HA+DEV and the existing runtime files; retain current pins/data for rollback.
+2. Install the exact companion revision above using the supported DEV/app route,
+   then verify startup and protocol-2 `restore_playback` readiness before HA.
+3. Deploy matching 0.7.0b6 integration files, validate configuration, restart Core
+   only with approval, and wait at least 60 seconds before recovery verification.
+4. Test empty, paused/stopped and active queues, interrupted positions, repeated
+   snoozes with changed music, Dismiss ringing/snoozed, queue edits/same-song
+   copies, takeover, message repeat off/on, and sleep-entity independence.
+   Offline checks are not physical acceptance. Do not retire DEV/stable or their data.
+
+Older sections below are deployment history; the lifecycle above supersedes
+their music-only-snooze and queue-cleanup assumptions.
+
 ## Project-only follow-up: timed music-volume ramp (issue #3)
 
 The user approved the implementation scope, not live activation. The working tree
@@ -133,7 +184,7 @@ the card editor, so runtime protocol-2 capabilities/song search remain pending.
 3. Report song results or the exact error; cancel the draft if not continuing.
    An ordinary MA library service query is not this protocol-2 check.
 4. With explicit consent, save song/gain/delay while leaving the alarm off, then
-   use **Test**. Verify exact assistant voice, delay, full song, music-only Snooze,
+   use **Test**. Verify exact assistant voice, delay, full song, Snooze restoration,
    Dismiss and Sleep in. Scheduled firing, deadline escalation, takeover and
    restart recovery still need acceptance testing.
 
@@ -251,8 +302,8 @@ has been transferred to the host's local-app folder.
    installed files, validate, restart, wait **at least 60 seconds**, then verify
    loading and the actual dashboard at phone/desktop widths.
 8. Verify scheduled firing, selected song, exact assistant voice, voice delay,
-   complete playback, Snooze, Dismiss, Sleep in, deadline escalation, busy-queue
-   refusal, takeover and restart without speech replay. Keep an independent
+   complete playback, Snooze/Dismiss restoration, Sleep in, deadline escalation,
+   active/stopped queues, takeover and once-per-snooze message behavior. Keep an independent
    alarm for essential wake-ups.
 9. Only after verification and separate approval, disable/remove DEV. Its removal
    can delete data; do not uninstall it merely to free a port. Retain rollback
@@ -317,7 +368,7 @@ The new app fork is source-only; no packaged-app migration was performed.
 The card's Next label uses HA-local Today/Tomorrow/calendar dates, refreshes
 across midnight, and uses dd/mm/yy plus 24-hour time for later dates.
 Queue tests must cover empty, stopped with existing tracks, and active music:
-immediate alarm playback, retained tracks, speech once, Snooze without speech,
-Dismiss removing only the alarm item, duplicate/lost-response safety, and later
+immediate alarm playback, retained tracks, default-once/opted-in snooze speech,
+Snooze/Dismiss removing only the alarm item and restoring interrupted music, duplicate/lost-response safety, and later
 user playback not stopped by stale controls. Offline checks do not close these
 live acceptance gates.

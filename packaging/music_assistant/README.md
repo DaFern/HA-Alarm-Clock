@@ -6,17 +6,23 @@ test API. Ordinary tone/voice alarms do not require this package.
 
 ### Issue #4 queue-preservation extension
 
-Current templates advertise protocol 2 plus `preserve_queue`. Scheduled alarms
+Current templates advertise protocol 2 plus `preserve_queue` and `restore_playback`. Scheduled alarms
 and confirmed saved-alarm Tests can append/start an alarm item on a nonempty or
 playing queue, without discarding existing tracks. Only the alarm item is removed
-after an owned stop. A later user playback/session is never stopped by stale
-alarm controls. Enqueue attempts are consumed before preparation/dispatch so an
-uncertain response cannot duplicate the alarm song.
+after an owned Snooze/Dismiss, and the interrupted playing item is resumed at its
+saved position if still present. Every snooze wake-up captures current playback
+and creates a fresh unique alarm segment. The live queue is filtered by the alarm
+item ID; user additions, removals, order changes and copies of the same song are
+preserved. A later user playback/session is never stopped or overwritten by stale
+alarm controls. Lost stop responses do not stop restored music a second time.
+Enqueue attempts are consumed before preparation/dispatch so an uncertain response
+cannot duplicate the alarm song. Message repetition is opt-in per snooze wake-up;
+natural song loops never rearm speech.
 
 The older protocol-1 experimental random-song test remains idle/empty-only;
 it is not the saved-alarm Test. Grouping, Repeat, Autoplay and ambient overlays
 remain unsupported. The old `7aab695...` deployment lacks this capability.
-Publish/install a regenerated companion before deploying integration 0.7.0b5.
+Publish/install a regenerated companion before deploying integration 0.7.0b6.
 Empty, stopped-nonempty and active queues still require live speaker acceptance;
 offline command tests are not an audible result.
 
@@ -87,7 +93,8 @@ generated context and installed sources have separate SHA-256 manifests.
    is silently redirected or enabled.
 7. With separate deployment/restart consent, deploy the integration candidate;
    test song selection, delayed assistant voice, full playback, Snooze, Dismiss,
-   Sleep in, restart without speech replay, busy queue rejection and takeover.
+   Sleep in, once-per-snooze message opt-in/off, current-track/position restoration,
+   user queue edits/copies, active/stopped queues, lost responses and takeover.
 
 Retain the previous app, its data and previous integration files for rollback.
 Stop the companion before restoring the prior MA app and HA connection. A

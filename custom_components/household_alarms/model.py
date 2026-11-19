@@ -22,6 +22,7 @@ DEFAULTS = {
     "music_ramp_enabled": False, "music_ramp_step": 5, "music_ramp_seconds": 30,
     "start_volume": 20, "max_volume": 60, "volume_step": 10,
     "repeat_seconds": 60, "snooze_enabled": True, "snooze_minutes": 5,
+    "repeat_message_after_snooze": False,
     "max_snoozes": 3, "deadline": "", "allow_sleep_in": False,
     "notify_enabled": False, "notify_service": "",
     "phone_enabled": False, "phone_service": "", "phone_wake_screen": True,
@@ -84,7 +85,7 @@ def validate(
         result[key] = "\n".join(phrases)
     if not result["name"]:
         raise AlarmError("Give the alarm a name")
-    for key in ("enabled", "snooze_enabled", "allow_sleep_in", "notify_enabled", "briefing_enabled", "schedule_enabled", "clear_sleep_on_dismiss", "music_enabled", "music_ramp_enabled", "phone_enabled", "phone_wake_screen"):
+    for key in ("enabled", "snooze_enabled", "repeat_message_after_snooze", "allow_sleep_in", "notify_enabled", "briefing_enabled", "schedule_enabled", "clear_sleep_on_dismiss", "music_enabled", "music_ramp_enabled", "phone_enabled", "phone_wake_screen"):
         if type(result[key]) is not bool:
             raise AlarmError(f"Invalid {key}")
     if require_spoken_assistant and (result["briefing_enabled"] or result["tone"] == "none") and not result["assistant_id"]:
@@ -176,6 +177,15 @@ def include_event_title(title: str, include: str = "", exclude: str = "") -> boo
     included = [line.strip().casefold() for line in include.splitlines() if line.strip()]
     excluded = [line.strip().casefold() for line in exclude.splitlines() if line.strip()]
     return not any(phrase in title for phrase in excluded) and (not included or any(phrase in title for phrase in included))
+
+
+def morning_message_due(alarm: dict, run: dict) -> bool:
+    """One attempted message per explicitly permitted ring, not per song loop."""
+    first = run["cycles"] == 0 and not run.get("escalated") and not run.get("briefing_attempted")
+    after_snooze = (alarm.get("repeat_message_after_snooze", False)
+                    and alarm["snooze_enabled"] and run.get("snoozes", 0) > 0
+                    and run.get("briefing_snooze", 0) < run["snoozes"])
+    return bool(first or after_snooze)
 
 
 def speech_wait_seconds(message: str) -> float:

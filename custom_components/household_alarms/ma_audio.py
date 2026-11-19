@@ -59,6 +59,7 @@ class MusicTests:
         self.submitted = False
         self.selected = None
         self.protocol = PROTOCOL
+        self.playback_id = None
 
     @property
     def active(self):
@@ -120,6 +121,7 @@ class MusicTests:
         self.selected = deepcopy(selected)
         self.protocol = 2 if selected else PROTOCOL
         run_id = str(uuid.uuid4())
+        self.playback_id = run_id
         # Reserve synchronously before any network operation can interleave.
         self.members = self.manager._reserve(speaker, run_id)
         self.session = {"id": run_id, "alarm_id": alarm_id, "speaker": speaker,
@@ -160,10 +162,47 @@ class MusicTests:
 
     async def _control(self, action, **extra):
         result = await self._send("player_queues/briefing_test_control", queue_id=self.queue_id,
-                                  run_id=self.session["id"], action=action, **extra)
+                                  run_id=self.playback_id, action=action, **extra)
         if not isinstance(result, dict) or result.get("protocol") != self.protocol:
             raise AlarmError("MA returned an incompatible test-control response")
+        if result.get("restoration_failed"):
+            raise AlarmError("Alarm stopped, but previous music restoration was not confirmed")
         return result
+
+    async def _selected_wake(self, alarm):
+        """New segment captures current music, not the first ring's stale snapshot."""
+        from .music import capabilities, require_ramp
+        if resolve_server_id(self.manager.hass, self.session["speaker"]) != alarm["music_server"]:
+            raise AlarmError("The Music Assistant connection changed; other playback was left alone")
+        ready = await capabilities(self.client, self.queue_id)
+        require_ramp(alarm, ready)
+        if ready.get("ready") is not True:
+            raise AlarmError("; ".join(ready.get("reasons", [])) or "Music Assistant is not ready")
+        text, engine, pipeline = "", "", None
+        if alarm.get("repeat_message_after_snooze") and (alarm["assistant_id"] or alarm["briefing_enabled"]):
+            pipeline = resolve_assistant(self.manager.hass, alarm["assistant_id"], voice=True)
+            engines = [item for item in ready.get("engines", []) if item.get("entity_id") == pipeline.tts_engine]
+            if len(engines) != 1:
+                raise AlarmError("The assistant's exact HA voice is unavailable or ambiguous in Music Assistant")
+            engine = engines[0]["uid"]
+            try:
+                text = await self.manager.async_briefing(alarm, pipeline)
+            except Exception:
+                text = f"Good morning, {alarm['person'] or alarm['name']}. It is time to get up."
+        if self.desired != "playing":
+            return False
+        if resolve_server_id(self.manager.hass, self.session["speaker"]) != alarm["music_server"]:
+            raise AlarmError("The Music Assistant connection changed during message preparation")
+        self.playback_id = str(uuid.uuid4())
+        self.submitted = True
+        result = await self._send("player_queues/briefing_test_start", queue_id=self.queue_id,
+            run_id=self.playback_id, track_uri=alarm["music_track"], message=text, tts_engine=engine,
+            language=pipeline.tts_language if pipeline else None, voice=pipeline.tts_voice if pipeline else None,
+            music_gain=alarm["music_gain"] / 100, speech_delay=alarm["speech_delay"],
+            volume_level=alarm["start_volume"])
+        if not isinstance(result, dict) or result.get("protocol") != self.protocol or result.get("status") != "playing":
+            raise AlarmError("Music Assistant did not confirm the snooze wake-up")
+        return True
 
     async def _run(self, alarm):
         try:
@@ -227,7 +266,10 @@ class MusicTests:
             snooze_until = 0
             while self.desired not in ("dismissed", "sleeping_in") and self.clock() < expires:
                 self.event.clear()
-                status = await self._control("status")
+                # During a selected-alarm snooze, the previous segment has ended.
+                # The restored music belongs to the user, not to this test.
+                status = ({"owned": True} if self.selected and self.session["status"] == "snoozed"
+                          else await self._control("status"))
                 if self.desired in ("dismissed", "sleeping_in"):
                     break
                 if not status.get("owned"):
@@ -237,18 +279,24 @@ class MusicTests:
                     stopped = await self._control("snooze")
                     if not stopped.get("owned"):
                         raise AlarmError("The test no longer owns this playback")
+                    if self.selected:
+                        self.submitted = False
                     snooze_until = self.clock() + self.session["snooze_seconds"]
-                    self.session.update(status="snoozed", message="Test snooze: the same song will restart from the beginning, without the message.")
+                    self.session.update(status="snoozed", message="Test snooze: interrupted music resumed when available. The alarm will start again at wake-up.")
                     self.manager.changed()
                 elif self.session["status"] == "snoozed" and self.clock() >= snooze_until:
                     self.desired = "playing"
                     extra = {"volume_level": alarm["start_volume"]} if ramp else {}
-                    restarted = await self._control("restart", **extra)
-                    if not restarted.get("owned"):
-                        raise AlarmError("The test no longer owns this playback")
-                    self.session.update(status="playing", message="Music only. The morning message will not repeat.")
+                    if self.selected:
+                        if not await self._selected_wake(alarm):
+                            continue
+                    else:
+                        restarted = await self._control("restart", **extra)
+                        if not restarted.get("owned"):
+                            raise AlarmError("The test no longer owns this playback")
+                    self.session.update(status="playing", message="Alarm resumed. The message repeats only when enabled for snooze wake-ups.")
                     if ramp:
-                        ramp = MusicVolumeRamp(alarm, self.client, self.queue_id, self.session["id"], clock=self.clock)
+                        ramp = MusicVolumeRamp(alarm, self.client, self.queue_id, self.playback_id, clock=self.clock)
                     self.manager.changed()
                 elif self.session["status"] == "playing":
                     warning = await ramp.tick() if ramp else None
@@ -274,9 +322,9 @@ class MusicTests:
     async def _finish(self):
         interrupted = self.session["status"] == "interrupted"
         try:
-            if self.submitted and not interrupted:
+            if self.submitted and (not interrupted or self.selected):
                 result = await self._control("stop")
-                if not result.get("owned"):
+                if not result.get("owned") and not result.get("released"):
                     self.session.update(status="interrupted", message="The test no longer owns this session. Other playback was left alone.")
             if self.session["status"] not in TERMINAL:
                 self.session.update(status=self.desired if self.desired in TERMINAL else "finished",

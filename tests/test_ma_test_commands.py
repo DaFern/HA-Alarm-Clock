@@ -14,6 +14,7 @@ import test_ma_one_shot as fixture
 class State(StrEnum):
     IDLE = 'idle'
     PLAYING = 'playing'
+    PAUSED = 'paused'
 
 
 class MACommandTests(unittest.IsolatedAsyncioTestCase):
@@ -42,20 +43,26 @@ class MACommandTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(self.lock.locked())
             self.calls.append('prepare')
             return fixture.adapter.PreparedBriefing(args[1], '/trusted/voice.wav', kwargs['levels'])
+        def build_queue_item(queue, media):
+            self.enqueues += 1
+            item_id = 'test-item' if self.enqueues == 1 else f'test-item-{self.enqueues}'
+            return types.SimpleNamespace(uri=media.uri, queue_item_id=item_id)
         namespace = dict(api_command=api_command, handle_play_action=handle_play_action, Any=object,
             get_tts_engines=lambda mass: self.get_engines(mass),
             Scope=types.SimpleNamespace(QUEUES_CONTROL='control'), PlaybackState=State,
             PlayerType=types.SimpleNamespace(GROUP='group'), RepeatMode=types.SimpleNamespace(OFF='off'),
             MediaType=types.SimpleNamespace(TRACK='track'), QueueOption=types.SimpleNamespace(ADD='add'),
             PlayerUnavailableError=ValueError, InvalidDataError=ValueError,
-            prepare_briefing=prepare, MixLevels=fixture.adapter.MixLevels)
+            prepare_briefing=prepare, MixLevels=fixture.adapter.MixLevels,
+            Track=types.SimpleNamespace, build_queue_item=build_queue_item)
         source = (fixture.ROOT / 'prototypes/ma_one_shot/test_commands.py.txt').read_text()
         source += '\n' + (fixture.ROOT / 'prototypes/ma_one_shot/alarm_commands.py.txt').read_text()
         exec('class Host:\n' + source, namespace)
         self.host = namespace['Host']()
         self.queue = types.SimpleNamespace(state=State.IDLE, repeat_mode='off',
                                             autoplay_enabled=False, overlay_enabled=False,
-                                            current_item=None, current_index=None, index_in_buffer=None)
+                                            current_item=None, current_index=None, index_in_buffer=None,
+                                            corrected_elapsed_time=0, next_item=None)
         self.data = types.SimpleNamespace(queue=self.queue, items=[], session_id=None)
         self.player = types.SimpleNamespace(state=types.SimpleNamespace(
             type='player', active_group=None, synced_to=None, group_members=[],
@@ -66,31 +73,40 @@ class MACommandTests(unittest.IsolatedAsyncioTestCase):
         self.host.mass = types.SimpleNamespace(
             streams=types.SimpleNamespace(audio=types.SimpleNamespace(briefings=self.mixer)),
             players=types.SimpleNamespace(get_player=lambda _: self.player, cmd_volume_set=volume))
+        async def get_track(uri):
+            return types.SimpleNamespace(uri=uri, available=True)
+        self.host.mass.music = types.SimpleNamespace(get_item_by_uri=get_track)
         self.host._queue_data = {'Kitchen': self.data}
         self.host.update_items = lambda queue, items: setattr(self.data, 'items', items)
+        self.host.get_item = lambda queue, index: self.data.items[index] if isinstance(index, int) and 0 <= index < len(self.data.items) else None
         self.host.get = lambda _: self.queue
         def permission(_):
             if self.denied:
                 raise PermissionError('denied')
         self.host._check_player_permission = permission
+        self.enqueues = 0
+        self.positions = []
         async def play_media(queue, uri, option):
             self.assertEqual(option, 'add')
-            self.data.items.append(types.SimpleNamespace(uri=uri, queue_item_id='test-item'))
+            self.data.items.append(build_queue_item(queue, types.SimpleNamespace(uri=uri)))
         self.host.play_media = play_media
         async def play_index(queue, item, seek, fade, *, briefing=None, briefing_owner=None):
             self.assertTrue(self.lock.locked())
-            self.assertEqual(seek, 0)
+            self.assertGreaterEqual(seek, 0)
+            self.positions.append((item, seek))
             self.calls.append(('play_index', briefing is not None))
             self.mixer.cancel_queue(queue)
             self.data.session_id = 'session-' + str(len(self.calls))
             if briefing is not None:
                 self.mixer.arm(queue, self.data.session_id, briefing.run_id, briefing.source,
                                levels=briefing.levels)
-            self.mixer.bind_owner(queue, self.data.session_id, briefing_owner)
+            if briefing_owner is not None:
+                self.mixer.bind_owner(queue, self.data.session_id, briefing_owner)
             if briefing_owner is not None:
                 await volume(queue, briefing_owner['volume_level'])
             self.queue.state = self.player.state.playback_state = State.PLAYING
             self.queue.current_item = next(i for i in self.data.items if i.queue_item_id == item)
+            self.queue.corrected_elapsed_time = seek
             self.player.state.active_source = queue
         self.host._play_index = play_index
         async def stop(queue):
@@ -232,15 +248,20 @@ class MACommandTests(unittest.IsolatedAsyncioTestCase):
                             types.SimpleNamespace(uri='library://track/2', queue_item_id='old-2')]
                 self.data.items = original.copy()
                 self.queue.state = self.player.state.playback_state = State.PLAYING if active else State.IDLE
+                self.queue.current_item = original[0]
+                self.queue.corrected_elapsed_time = 42
                 run = f'preserve-{active}'
                 self.assertTrue((await self.host.alarm_capabilities('Kitchen'))['ready'])
                 await self.host.alarm_start('Kitchen', run, 'library://track/22')
                 self.assertEqual(self.data.items[:2], original)
-                self.assertEqual(self.queue.current_item.queue_item_id, 'test-item')
+                self.assertEqual(self.queue.current_item.uri, 'library://track/22')
                 await self.host.alarm_control('Kitchen', run, 'snooze')
-                await self.host.alarm_control('Kitchen', run, 'restart')
+                self.assertEqual(self.data.items, original)
+                if active:
+                    self.assertEqual(self.positions[-1], ('old-1', 42))
+                await self.host.alarm_start('Kitchen', run + '-wake', 'library://track/22')
                 self.assertEqual(len(self.data.items), 3)
-                await self.host.alarm_control('Kitchen', run, 'stop')
+                await self.host.alarm_control('Kitchen', run + '-wake', 'stop')
                 self.assertEqual(self.data.items, original)
 
     async def test_production_does_not_stop_later_user_playback(self):
@@ -259,23 +280,173 @@ class MACommandTests(unittest.IsolatedAsyncioTestCase):
         await self.host.alarm_start('Kitchen', 'same-song', 'library://track/22',
             message='Good morning', tts_engine='ha/tts.piper')
         await self.host.alarm_control('Kitchen', 'same-song', 'snooze')
-        await self.host.alarm_control('Kitchen', 'same-song', 'restart')
+        await self.host.alarm_start('Kitchen', 'same-song-wake', 'library://track/22')
         self.assertEqual(self.calls.count('prepare'), 1)
         self.assertEqual(self.data.items[0], existing)
-        await self.host.alarm_control('Kitchen', 'same-song', 'stop')
+        await self.host.alarm_control('Kitchen', 'same-song-wake', 'stop')
         self.assertEqual(self.data.items, [existing])
 
     async def test_production_uncertain_enqueue_is_never_duplicated(self):
-        original = self.host.play_media
-        async def lost_response(*args, **kwargs):
-            await original(*args, **kwargs)
+        original = self.host.update_items
+        def lost_response(*args, **kwargs):
+            original(*args, **kwargs)
             raise ValueError('response lost')
-        self.host.play_media = lost_response
+        self.host.update_items = lost_response
         with self.assertRaises(ValueError):
             await self.host.alarm_start('Kitchen', 'lost', 'library://track/22')
         with self.assertRaisesRegex(ValueError, 'already attempted'):
             await self.host.alarm_start('Kitchen', 'lost', 'library://track/22')
         self.assertEqual(len(self.data.items), 1)
+
+    def prior_music(self, item_id='prior', position=73):
+        item = types.SimpleNamespace(uri='library://track/5', queue_item_id=item_id)
+        self.data.items.append(item)
+        self.queue.current_item = item
+        self.queue.current_index = len(self.data.items) - 1
+        self.queue.corrected_elapsed_time = position
+        self.queue.state = self.player.state.playback_state = State.PLAYING
+        self.player.state.active_source = 'Kitchen'
+        return item
+
+    async def test_snooze_removes_only_alarm_and_resumes_interrupted_position(self):
+        prior = self.prior_music()
+        self.host._clear = lambda *a, **k: self.fail('An alarm must never clear the queue')
+        await self.host.alarm_start('Kitchen', 'ring', 'library://track/22')
+        alarm_id = self.queue.current_item.queue_item_id
+        copy = types.SimpleNamespace(uri='library://track/22', queue_item_id='user-copy')
+        self.data.items.insert(0, copy)
+        result = await self.host.alarm_control('Kitchen', 'ring', 'snooze')
+        self.assertTrue(result['restored'])
+        self.assertEqual(self.positions[-1], (prior.queue_item_id, 73))
+        self.assertEqual(self.data.items, [copy, prior])
+        self.assertNotIn(alarm_id, [item.queue_item_id for item in self.data.items])
+        self.assertFalse(self.mixer._owners)  # restored music is not alarm-owned
+
+    async def test_each_snooze_wake_captures_current_music_and_new_position(self):
+        self.prior_music(position=10)
+        for ordinal in range(3):
+            run = f'ring-{ordinal}'
+            await self.host.alarm_start('Kitchen', run, 'library://track/22')
+            result = await self.host.alarm_control('Kitchen', run, 'snooze')
+            self.assertTrue(result['restored'])
+            expected = ('prior', 10) if ordinal == 0 else (f'changed-{ordinal}', ordinal * 31)
+            self.assertEqual(self.positions[-1], expected)
+            self.prior_music(f'changed-{ordinal + 1}', (ordinal + 1) * 31)
+        self.assertTrue(all(not i.queue_item_id.startswith('test-item') for i in self.data.items))
+
+    async def test_dismiss_resumes_prior_music_and_duplicate_stop_never_stops_it(self):
+        self.prior_music(position=112)
+        await self.host.alarm_start('Kitchen', 'dismiss', 'library://track/22')
+        first = await self.host.alarm_control('Kitchen', 'dismiss', 'stop')
+        self.assertEqual(self.positions[-1], ('prior', 112))
+        before = list(self.calls)
+        second = await self.host.alarm_control('Kitchen', 'dismiss', 'stop')
+        self.assertEqual(first, second)
+        self.assertEqual(before, self.calls)
+
+    async def test_dismiss_without_prior_playing_music_leaves_queue_stopped(self):
+        for state in (State.IDLE, State.PAUSED):
+            self.prior_music()
+            self.queue.state = self.player.state.playback_state = state
+            run = 'stopped-' + state
+            await self.host.alarm_start('Kitchen', run, 'library://track/22')
+            count = len(self.data.items) - 1
+            result = await self.host.alarm_control('Kitchen', run, 'stop')
+            self.assertFalse(result['restored'])
+            self.assertEqual(self.queue.state, State.IDLE)
+            self.assertEqual(len(self.data.items), count)
+
+    async def test_empty_queue_is_stopped_after_dismiss(self):
+        await self.host.alarm_start('Kitchen', 'empty', 'library://track/22')
+        await self.host.alarm_control('Kitchen', 'empty', 'stop')
+        self.assertEqual(self.data.items, [])
+        self.assertEqual(self.queue.state, State.IDLE)
+
+    async def test_deleted_prior_track_is_not_reinserted_and_user_edits_survive(self):
+        prior = self.prior_music()
+        await self.host.alarm_start('Kitchen', 'edited', 'library://track/22')
+        self.data.items.remove(prior)
+        addition = types.SimpleNamespace(uri='library://track/7', queue_item_id='addition')
+        self.data.items.insert(0, addition)
+        result = await self.host.alarm_control('Kitchen', 'edited', 'stop')
+        self.assertFalse(result['restored'])
+        self.assertEqual(self.data.items, [addition])
+        self.assertEqual(self.queue.state, State.IDLE)
+
+    async def test_new_session_takeover_cleans_only_safe_stale_item_without_restore(self):
+        self.prior_music()
+        await self.host.alarm_start('Kitchen', 'taken', 'library://track/22')
+        user = self.prior_music('user-session', 90)
+        self.data.session_id = 'new-user-session'
+        before = list(self.calls)
+        result = await self.host.alarm_control('Kitchen', 'taken', 'stop')
+        self.assertTrue(result['released'])
+        self.assertFalse(result['owned'])
+        self.assertEqual(self.calls, before)
+        self.assertEqual(self.queue.current_item, user)
+        self.assertEqual(self.queue.current_index, 1)
+        self.assertEqual([i.queue_item_id for i in self.data.items], ['prior', 'user-session'])
+
+    async def test_uncertain_restore_is_not_dispatched_again(self):
+        self.prior_music()
+        await self.host.alarm_start('Kitchen', 'uncertain', 'library://track/22')
+        original = self.host._play_index
+        async def lost_response(*args, **kwargs):
+            await original(*args, **kwargs)
+            raise TimeoutError('response lost after resuming')
+        self.host._play_index = lost_response
+        with self.assertRaises(TimeoutError):
+            await self.host.alarm_control('Kitchen', 'uncertain', 'stop')
+        before = list(self.calls)
+        result = await self.host.alarm_control('Kitchen', 'uncertain', 'stop')
+        self.assertTrue(result['restoration_failed'])
+        self.assertEqual(self.calls, before)
+
+    async def test_user_deleted_track_during_enqueue_is_not_restored_from_snapshot(self):
+        prior = self.prior_music()
+        original = self.host.mass.music.get_item_by_uri
+        async def edited(*args, **kwargs):
+            media = await original(*args, **kwargs)
+            self.data.items.remove(prior)
+            self.queue.current_item = None
+            return media
+        self.host.mass.music.get_item_by_uri = edited
+        await self.host.alarm_start('Kitchen', 'enqueue-edit', 'library://track/22')
+        await self.host.alarm_control('Kitchen', 'enqueue-edit', 'stop')
+        self.assertEqual(self.data.items, [])
+
+    async def test_source_takeover_during_volume_restore_prevents_stale_resume(self):
+        self.prior_music()
+        await self.host.alarm_start('Kitchen', 'restore-race', 'library://track/22')
+        async def volume_then_takeover(*args):
+            self.player.state.active_source = 'new-source'
+        self.host.mass.players.cmd_volume_set = volume_then_takeover
+        before = len(self.positions)
+        result = await self.host.alarm_control('Kitchen', 'restore-race', 'stop')
+        self.assertFalse(result['restored'])
+        self.assertEqual(len(self.positions), before)
+        self.assertEqual(self.player.state.active_source, 'new-source')
+
+    async def test_foreign_playing_source_blocks_alarm_without_mutation(self):
+        self.player.state.active_source = 'line-in'
+        self.player.state.playback_state = State.PLAYING
+        with self.assertRaisesRegex(ValueError, 'speaker source'):
+            await self.host.alarm_start('Kitchen', 'foreign-source', 'library://track/22')
+        self.assertEqual(self.data.items, [])
+        self.assertEqual(self.calls, [])
+
+    async def test_early_snooze_prevents_late_start(self):
+        self.assertFalse((await self.host.alarm_control('Kitchen', 'early', 'snooze'))['owned'])
+        with self.assertRaisesRegex(ValueError, 'already attempted'):
+            await self.host.alarm_start('Kitchen', 'early', 'library://track/22')
+        self.assertEqual(self.data.items, [])
+
+    async def test_alarm_does_not_use_normal_enqueue_shuffle_or_replacement(self):
+        self.prior_music()
+        self.host.play_media = AsyncMock(side_effect=AssertionError('normal enqueue would reorder tracks'))
+        await self.host.alarm_start('Kitchen', 'append-only', 'library://track/22')
+        self.host.play_media.assert_not_awaited()
+        self.assertEqual([i.queue_item_id for i in self.data.items], ['prior', 'test-item'])
 
     async def test_production_selected_song_delay_and_music_only_start(self):
         result = await self.host.alarm_start('Kitchen', 'scheduled-1', 'library://track/22',

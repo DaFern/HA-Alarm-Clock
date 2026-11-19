@@ -9,10 +9,10 @@ import uuid
 
 from .assistants import resolve_assistant
 from .ma_audio import resolve_client, resolve_server_id
-from .model import AlarmError, volume
+from .model import AlarmError, morning_message_due, volume
 
 PROTOCOL = 2
-FEATURES = {"selected_track", "speech_delay", "music_only", "preserve_queue"}
+FEATURES = {"selected_track", "speech_delay", "music_only", "preserve_queue", "restore_playback"}
 
 
 async def command(client, name, *, timeout=90, **data):
@@ -29,7 +29,7 @@ async def command(client, name, *, timeout=90, **data):
 async def capabilities(client, queue_id):
     result = await command(client, "player_queues/alarm_capabilities", queue_id=queue_id, timeout=15)
     if not isinstance(result, dict) or result.get("protocol") != PROTOCOL or not FEATURES <= set(result.get("features", [])):
-        raise AlarmError("Music alarms require the updated HA-AlarmClock MA companion (protocol 2 with preserve_queue)")
+        raise AlarmError("Music alarms require the updated HA-AlarmClock MA companion (protocol 2 with restore_playback)")
     return result
 
 
@@ -168,11 +168,11 @@ class AlarmMusic:
                 if ready.get("ready") is not True:
                     raise AlarmError("; ".join(ready.get("reasons", [])) or "The music speaker is not ready")
                 message, engine, pipeline = "", "", None
-                wants_speech = not self.run.get("briefing_attempted") and bool(
+                wants_speech = morning_message_due(self.alarm, self.run) and bool(
                     self.alarm["assistant_id"] or self.alarm["briefing_enabled"])
                 if wants_speech:
                     # Save before generation too: cancellation/restart never repeats speech.
-                    await self._persist(briefing_attempted=True)
+                    await self._persist(briefing_attempted=True, briefing_snooze=self.run.get("snoozes", 0))
                     try:
                         pipeline = resolve_assistant(self.manager.hass, self.alarm["assistant_id"], voice=True)
                         engines = [item for item in ready.get("engines", []) if item.get("entity_id") == pipeline.tts_engine]
@@ -216,7 +216,7 @@ class AlarmMusic:
                 state = await self.control("status")
                 if not state["owned"]:
                     self.takeover = True
-                    await self._persist(music_blocked=True, music_attempt=None, error="Music playback changed elsewhere. Other audio was left alone; dismiss this alarm to finish.")
+                    await self._persist(music_blocked=True, error="Music playback changed elsewhere. Other audio was left alone; dismiss this alarm to finish.")
                     return
                 warning = await ramp.tick()
                 if ramp.suspended and not self.run.get("music_ramp_suspended"):
@@ -247,9 +247,11 @@ class AlarmMusic:
                 self.client, self.queue_id = self.resolver(self.manager.hass, self.alarm["speaker"])
             if self.server_resolver(self.manager.hass, self.alarm["speaker"]) != self.alarm["music_server"]:
                 raise AlarmError("The Music Assistant connection changed; other playback was left alone")
-            stopped = await self.control("stop")
-            if not stopped["owned"]:
+            stopped = await self.control("snooze" if self.run.get("status") == "snoozed" else "stop")
+            if not stopped["owned"] and not stopped.get("released"):
                 raise AlarmError("The music stop was not confirmed")
+            if stopped.get("restoration_failed"):
+                raise AlarmError("Previous music restoration was not confirmed")
             await self._persist(music_attempt=None)
         except Exception:
             await self._persist(music_blocked=True,

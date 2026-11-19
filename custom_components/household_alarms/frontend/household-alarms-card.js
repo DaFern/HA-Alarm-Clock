@@ -389,7 +389,7 @@ class HouseholdAlarmsCard extends HTMLElement {
       soundMode === "voice" ? `<p class="mode-help">Voice only uses your selected morning message. Choose one below.</p>` : "",
       soundMode === "voice" && messageMode === "off" ? '<p class="error" role="alert">Choose a morning message to use Voice only.</p>' : "",
       soundMode === "music" ? [
-        '<p class="mode-help">Requires the updated HA-AlarmClock MA companion and one ungrouped speaker. The alarm starts its song immediately, preserving existing queued tracks. Music repeats until stopped; Snooze restarts the same song without the message.</p>',
+        '<p class="mode-help">Requires the updated HA-AlarmClock MA companion and one ungrouped speaker. Snooze and Dismiss remove only the alarm item and resume the music it interrupted. A snooze wake-up starts a fresh alarm segment, preserving the music then playing. Playback changes made elsewhere are left alone.</p>',
         this._songPicker(),
         `<div class="grid">${this._field("start_volume", "Starting speaker volume (%)", "number", 'min="1" max="100" required')}</div>`,
         this._check("music_ramp_enabled", "Increase speaker volume over time"), musicRampFields,
@@ -440,6 +440,7 @@ class HouseholdAlarmsCard extends HTMLElement {
       <details class="settings-panel" data-section="wake-limits" ${section("wake-limits")}><summary>Snooze and wake-up limits<span class="settings-summary" data-summary="wake-limits">${wakeSummary}${d.deadline ? ` · Get up by ${esc(d.deadline)}` : ""}</span></summary>
         ${this._check("snooze_enabled", "Allow snooze")}
         ${d.snooze_enabled ? `<div class="grid">${this._field("snooze_minutes", "Snooze minutes", "number", 'min="1" max="30" required')}${this._field("max_snoozes", "How many times?", "number", 'min="0" max="10" required')}</div>` : '<p>Snooze length and count are hidden while snooze is off.</p>'}
+        ${d.snooze_enabled && messageMode !== "off" ? this._check("repeat_message_after_snooze", "Repeat morning message after snooze") + '<p>Off by default. When enabled, the configured message is generated again on each snooze wake-up, never on ordinary song repeats.</p>' : ""}
         ${d.mode === "school" ? this._field("deadline", "Latest wake-up time", "time", "required") + '<p>Snoozes stop at this time. The alarm keeps ringing until you stop it.</p>' : this._field("deadline", "Latest wake-up time (optional)", "time")}
         ${d.mode !== "school" ? this._check("allow_sleep_in", "Allow sleeping in") : '<p>This saved alarm does not allow sleeping in.</p>'}
       </details>
