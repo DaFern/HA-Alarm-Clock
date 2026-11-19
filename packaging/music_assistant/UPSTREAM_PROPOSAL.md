@@ -22,7 +22,7 @@ speech. No provider song export or preview-clip substitution is involved.
 - Base: MA 2.10.12, upstream commit
   `6ab5bfa63f02d0daa237d342097a42feae5c5aae`.
 - Published, user-tested companion patch:
-  https://github.com/DaFern/server/commit/d66459f7f7eab48a18e7fb5d6c0768a17da2ef52
+  https://github.com/DaFern/music-assistant-alarm-clock-server/commit/d66459f7f7eab48a18e7fb5d6c0768a17da2ef52
 - HA consumer project: https://github.com/DaFern/HA-Alarm-Clock
 - The song remains the main PCM input. A registered MA TTS engine renders a
   finite second input using the named HA assistant's language and voice.
