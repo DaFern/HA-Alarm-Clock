@@ -46,4 +46,4 @@
 ## 2026-11-19 — issue #4 follow-up and fork preparation
 - Published timezone-aware Next labels and queue-preserving companion changes in project `79ac934` and existing server fork `46b4183`. Passed 291 Python tests including native FFmpeg tests, browser checks at four widths, Ruff and targeted companion mypy.
 - Created HA+DEV backup `ffa20773`, updated DEV's exact source pin and deployed matching HA 0.7.0b5 after the active test alarm cleared. Verified deployed hashes, configuration validation, recovery and live phone/desktop card rendering; played no new test audio.
-- Created and verified `DaFern/home-assistant-addon`; verified `DaFern/server` was already an upstream fork. Left app installation/migration and physical queue acceptance pending; retained earlier Plex/playback errors for follow-up.
+- Created and verified `DaFern/music-assistant-alarm-clock-app`; verified `DaFern/music-assistant-alarm-clock-server` was already an upstream fork. Left app installation/migration and physical queue acceptance pending; retained earlier Plex/playback errors for follow-up.
