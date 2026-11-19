@@ -335,7 +335,7 @@ class AlarmManager:
     async def _calendar_matches(self, alarm, now):
         entity = alarm["calendar"]
         phrases = alarm["calendar_filters"]
-        if not entity or not phrases.strip():
+        if not entity:
             self.warnings.pop(f"calendar:{alarm['id']}", None)
             return False
         key = (entity, now.date().isoformat(), phrases)
@@ -358,6 +358,7 @@ class AlarmManager:
             events = response[entity]["events"]
             if not isinstance(events, list):
                 raise AlarmError("Calendar could not be read")
+            # An empty filter means every event on this calendar matches.
             result = any(
                 include_event_title(str(event.get("summary", "")), phrases)
                 for event in events if isinstance(event, dict)

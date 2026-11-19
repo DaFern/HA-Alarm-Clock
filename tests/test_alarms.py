@@ -1003,6 +1003,16 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         await self.manager._tick(self.now)
         self.manager._deliver.assert_not_called()
 
+    async def test_calendar_rule_skips_any_event_when_filter_is_blank(self):
+        await self.create(enabled=True, calendar="calendar.school", calendar_rule="block")
+        self.hass.states.set("calendar.school", "on")
+        self.manager._deliver = AsyncMock()
+        async def respond(domain, service, data):
+            return {"calendar.school": {"events": [{"summary": "Team meeting"}]}}
+        self.hass.services.handler = respond
+        await self.manager._tick(self.now)
+        self.manager._deliver.assert_not_called()
+
     async def test_calendar_rule_keeps_weekday_without_a_matching_event(self):
         await self.create(enabled=True, calendar="calendar.school", calendar_rule="block",
                           calendar_filters="School holiday\nInset day")

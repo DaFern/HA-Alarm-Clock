@@ -120,6 +120,7 @@
     test("generic form has no preset family or assistant", !q('#people option') && !card._draft.assistant_id && !card._draft.weather);
     await mode('message','greeting');
     test('Simple greeting can be selected from Off before choosing an assistant', q('[data-mode-group="message"][aria-pressed="true"]').dataset.mode==='greeting' && !!q('[data-field="assistant_id"]') && !card._draft.assistant_id);
+    test('assistant selector shows its placeholder while no assistant is selected', q('[data-field="assistant_id"]').value==='' && q('[data-field="assistant_id"] option:checked').textContent==='Choose an assistant');
     await mode('message','off');
     test("each advanced section starts collapsed", ["wake-limits","phone-controls","help-alerts","sleep-switch"].every((id) => !q(`[data-section="${id}"]`).open));
     test('collapsed sections summarize current settings', q('[data-summary="wake-limits"]').textContent.includes('5 minutes') && q('[data-summary="phone-controls"]').textContent==='Phone controls off' && q('[data-summary="help-alerts"]').textContent==='Help alerts off' && q('[data-summary="sleep-switch"]').textContent==='No sleep switch selected');
@@ -166,6 +167,7 @@
     await set('calendar','calendar.school_holidays');
     test("calendar choice shows clear optional calendar rules", q('[data-field="calendar"]').getAttribute('label') === 'Calendar rules (optional)' && card._draft.calendar === 'calendar.school_holidays' && q('[data-field="calendar_rule"]') && q('[data-field="calendar_filters"]'));
     test("calendar rule explains matching days", q('#editor').textContent.includes('Write one word or phrase per line') && q('#editor').textContent.includes('Matching ignores capital letters'));
+    test("blank calendar filter skips every event on the selected calendar", q('#editor').textContent.includes('Leave blank to skip every event'));
     await set('calendar_filters','School holiday\nInset day');
     test("calendar phrases are saved separately", card._draft.calendar_filters === 'School holiday\nInset day' && card._draft.schedule_include === '');
     await set('calendar_rule','allow');

@@ -103,7 +103,7 @@ class HouseholdAlarmsCard extends HTMLElement {
     const current = String(this._draft[field] ?? "");
     const values = options.map((item) => typeof item === "string" ? [item, item] : item);
     if (current && !values.some(([id]) => id === current)) values.push([current, current + " (not currently available)"]);
-    return `<label>${esc(label)}<select data-field="${esc(field)}" ${required ? "required" : ""}>${optional ? `<option value="">${esc(emptyLabel)}</option>` : '<option value="" disabled>Choose…</option>'}${values.map(([id, text]) => `<option value="${esc(id)}" ${current === id ? "selected" : ""}>${esc(text)}</option>`).join("")}</select></label>`;
+    return `<label>${esc(label)}<select data-field="${esc(field)}" ${required ? "required" : ""}>${optional ? `<option value="">${esc(emptyLabel)}</option>` : `<option value="" disabled ${current ? "" : "selected"}>${esc(required ? emptyLabel : "Choose…")}</option>`}${values.map(([id, text]) => `<option value="${esc(id)}" ${current === id ? "selected" : ""}>${esc(text)}</option>`).join("")}</select></label>`;
   }
 
   _entity(field, label, domain, optional = true) {
@@ -347,7 +347,7 @@ class HouseholdAlarmsCard extends HTMLElement {
     if (["school", "non_school"].includes(d.mode)) repeats.push([d.mode, "Keep current schedule"]);
     const calendarHelp = d.calendar_rule === "allow"
       ? "The alarm will ring only on selected days when an event title includes one of these phrases. Add at least one phrase."
-      : "Selected days with an event title that includes one of these phrases will be skipped. Leave blank to skip no days.";
+      : "Selected days with any event on this calendar will be skipped. Add one or more phrases to skip only days whose event titles match. Leave blank to skip every event.";
     const musicRampFields = d.music_ramp_enabled
        ? `<div class="grid">${this._field("music_ramp_step", "Increase by (percentage points)", "number", 'min="1" max="25" required')}${this._field("music_ramp_seconds", "Every (seconds)", "number", 'min="30" max="300" required')}${this._field("max_volume", "Maximum speaker volume (%)", "number", 'min="1" max="100" required')}</div><p class="mode-help" data-ramp-summary>Starts at ${esc(d.start_volume)}%, rises by ${esc(d.music_ramp_step)} percentage points every ${esc(d.music_ramp_seconds)} seconds, up to ${esc(d.max_volume)}%. It does not restart music or repeat the voice. Snooze starts again at the starting volume; changing volume yourself pauses increases for that ring. Requires the updated MA companion.</p>`
       : `<div class="grid">${this._field("max_volume", "Maximum speaker volume (%)", "number", 'min="1" max="100" required')}${this._field("volume_step", "Increase per resumed ring (percentage points)", "number", 'min="0" max="25" required')}</div><p class="mode-help">No timed increases. Existing resume-volume behaviour is unchanged.</p>`;
