@@ -1,0 +1,36 @@
+snooze:
+  name: "Snooze an alarm"
+  description: "Snooze one active alarm without exceeding its get-up deadline."
+  fields:
+    alarm_id:
+      name: "Alarm ID"
+      required: true
+      selector:
+        text:
+dismiss:
+  name: "Dismiss an alarm"
+  description: "Stop repeats and pending snoozes for one alarm. This does not clear bedtime."
+  fields:
+    alarm_id:
+      name: "Alarm ID"
+      required: true
+      selector:
+        text:
+sleep_in:
+  name: "Sleep in"
+  description: "Dismiss an alarm only when sleeping in is permitted. Never allowed for school-day alarms."
+  fields:
+    alarm_id:
+      name: "Alarm ID"
+      required: true
+      selector:
+        text:
+dismiss_person:
+  name: "Dismiss a person's alarms"
+  description: "Dismiss only this person's active alarms and pending snoozes. Intended for a confirmed wake-up automation."
+  fields:
+    person:
+      name: "Person"
+      required: true
+      selector:
+        text:

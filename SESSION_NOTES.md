@@ -37,3 +37,8 @@
 - Deployed only the tested `manager.py`, without a new backup at the user's request. Configuration validation passed; completed the approved Core restart, waited 65 seconds and verified integration loading with no active alarms.
 - The user confirmed the saved-alarm Test with Cenotaph/Jarvis, then successful scheduled Kitchen playback, notification Snooze with music-only resume, Dismiss and notification cleanup after dismissal elsewhere.
 - Updated project/deployment documentation for publication. Left earlier connection resets unexplained, lock-screen/screen-wake and broader reliability checks pending, MA migration unstarted, the Echo restart unfixed and issue #3 deferred. Left the unrelated archive file excluded.
+
+## 2026-11-18 — project-only timed music-volume ramp
+- Implemented the approved opt-in step/interval/cap ramp with distinct tone-repeat labels, shared scheduled/Test logic, Snooze reset, manual override, persisted suspension and no downtime catch-up bursts. Added ownership-checked companion volume controls; the current published DEV pin did not include them.
+- Passed 282 Python tests (including five real MA-helper/FFmpeg tests), 100 Chromium checks at each width and targeted generated-companion Ruff/mypy checks. Visually reviewed offline mobile/desktop ramp controls and updated behaviour/deployment/package documentation.
+- Left these changes uncommitted, unpushed and undeployed; made no live settings changes, playback attempt, backup, restart or MA publication/migration. Left physical ramp acceptance and issue #3 open, and the unrelated archive file untouched.
