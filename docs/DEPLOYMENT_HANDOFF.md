@@ -294,16 +294,25 @@ project generator. Ruff and targeted mypy passed. HA+DEV partial backup
 `ffa20773` completed before the DEV change. DEV's source-pin syntax is
 `DaFern/server@<commit>` (not a full URL). DEV started on the new source, but
 Plex queue-sync errors and an `alarm_start` connection failure were observed.
-An active Test alarm blocked the matching HA deployment; do not restart over it.
-The server repository is already a genuine fork of `music-assistant/server`.
-The requested app fork of `music-assistant/home-assistant-addon` remains pending.
+An active Test alarm initially blocked HA deployment. After it cleared, the user
+approved proceeding despite those earlier playback errors. Integration 0.7.0b5
+was deployed from project commit `79ac934`; four runtime hashes matched and HA
+configuration validation passed. Core recovered after the restart/grace period,
+with one enabled alarm and none active. The card rendered at 390/1280px with
+Tomorrow/Not scheduled labels and retained playback-error details. No new audio
+test was performed, so physical queue-state acceptance remains pending.
+Runtime rollback files are at
+`/data/v2/cache/opencode/household_alarms-before-0.7.0b5-20261119T115306Z`.
+The server repository is already a genuine fork of `music-assistant/server`;
+`DaFern/home-assistant-addon` was created and verified as a genuine fork of
+`music-assistant/home-assistant-addon`. No app from that new fork was installed.
 
 Integration 0.7.0b5 requires `preserve_queue` on the protocol-2 companion.
 The updated source also includes the earlier volume-ramp extension. The old
 `7aab695...` DEV build is incompatible with the new scheduled-music contract.
 Do not deploy the new HA runtime until the updated companion is installed and
 its capability response is verified. Keep DEV/stable data and rollback copies.
-No separate GitHub forks or packaged-app migration are included in this change.
+The new app fork is source-only; no packaged-app migration was performed.
 
 The card's Next label uses HA-local Today/Tomorrow/calendar dates, refreshes
 across midnight, and uses dd/mm/yy plus 24-hour time for later dates.

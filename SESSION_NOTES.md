@@ -42,3 +42,8 @@
 - Implemented the approved opt-in step/interval/cap ramp with distinct tone-repeat labels, shared scheduled/Test logic, Snooze reset, manual override, persisted suspension and no downtime catch-up bursts. Added ownership-checked companion volume controls; the current published DEV pin did not include them.
 - Passed 282 Python tests (including five real MA-helper/FFmpeg tests), 100 Chromium checks at each width and targeted generated-companion Ruff/mypy checks. Visually reviewed offline mobile/desktop ramp controls and updated behaviour/deployment/package documentation.
 - Left these changes uncommitted, unpushed and undeployed; made no live settings changes, playback attempt, backup, restart or MA publication/migration. Left physical ramp acceptance and issue #3 open, and the unrelated archive file untouched.
+
+## 2026-11-19 — issue #4 follow-up and fork preparation
+- Published timezone-aware Next labels and queue-preserving companion changes in project `79ac934` and existing server fork `46b4183`. Passed 291 Python tests including native FFmpeg tests, browser checks at four widths, Ruff and targeted companion mypy.
+- Created HA+DEV backup `ffa20773`, updated DEV's exact source pin and deployed matching HA 0.7.0b5 after the active test alarm cleared. Verified deployed hashes, configuration validation, recovery and live phone/desktop card rendering; played no new test audio.
+- Created and verified `DaFern/home-assistant-addon`; verified `DaFern/server` was already an upstream fork. Left app installation/migration and physical queue acceptance pending; retained earlier Plex/playback errors for follow-up.
