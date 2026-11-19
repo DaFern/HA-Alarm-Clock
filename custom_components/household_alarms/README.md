@@ -184,7 +184,7 @@ their cause and long-term playback reliability remain unresolved.
 
 Stock MA and the previously published protocol-1 fork are **not sufficient**.
 Scheduled playback requires a protocol-2 companion. The temporary DEV route is
-now pinned to `DaFern/server@7aab695417cea5d0fdf926620724cfd873ef1c22`.
+now pinned to `DaFern/music-assistant-alarm-clock-server@7aab695417cea5d0fdf926620724cfd873ef1c22`.
 The separate local-app recipe is prepared under
 [`packaging/music_assistant`](../../packaging/music_assistant/README.md).
 It has a separate app identity/data directory and an exact upstream image digest,
@@ -282,7 +282,7 @@ automatic repeat setting, so HA loss does not create an endless server-side loop
   tones, not actual TTS, an authenticated MA server or a physical speaker.
 - HA-AlarmClock 0.6.0 was deployed and verified loaded/rendering after an approved
   Core restart on 2026-11-17. Saved alarm settings were not changed. The companion
-  fork is published at `DaFern/server@d66459f7f7eab48a18e7fb5d6c0768a17da2ef52`.
+  fork is published at `DaFern/music-assistant-alarm-clock-server@d66459f7f7eab48a18e7fb5d6c0768a17da2ef52`.
   MA DEV source selection/full-server verification remain pending. Its inspected
   logs reported a port 8097 conflict; stable and DEV must not share default ports.
   No speaker test has run. The HA project changes remain uncommitted/unpushed.
