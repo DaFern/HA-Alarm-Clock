@@ -385,6 +385,10 @@ class HouseholdAlarmsCard extends HTMLElement {
           `<button type="button" data-action="preview" ${this._busy ? "disabled" : ""}>Preview message</button><span class="muted">Plays on this device</span>`,
         ].join("") : `<button type="button" data-action="preview" ${this._busy ? "disabled" : ""}>Preview message</button><span class="muted">Plays on this device</span>`,
       ].join("");
+    const assistantAvailable = (this._data.assistants || []).some((item) => item.id === d.assistant_id);
+    const assistantRepair = saved?.assistant_warning && !assistantAvailable && messageMode !== "off"
+      ? `<p class="error" role="alert">${esc(saved.assistant_warning)} This saved alarm's spoken mode needs repair. Choose an available assistant below to keep the spoken message when saving edits. You can still use the alarm-list switch without repairing it.</p>`
+      : "";
     editor.innerHTML = `<form><header class="editor-header"><h3>${this._editingId ? "Edit alarm" : "New alarm"}</h3></header>
       <p>${saved ? "Use the alarm list to turn it on or off. Save your other changes below." : "New alarms start off. Save the alarm before using its list controls."}</p>
       <fieldset><legend>When</legend><div class="grid">
@@ -401,7 +405,7 @@ class HouseholdAlarmsCard extends HTMLElement {
       : ["school", "non_school"].includes(d.mode) ? '<p>This alarm keeps its current repeat days. Choose another repeat option to change them.</p>' : ""}
       ${d.mode === "school" ? '<p>Set the latest wake-up time under Snooze and wake-up limits.</p>' : ""}</fieldset>
       <fieldset><legend>Sound</legend>${soundFields}</fieldset>
-      <fieldset><legend>Morning message</legend>${this._modeButtons("message", messageMode, [["off", "Off"], ["greeting", "Simple greeting"], ["assistant", "Assistant-written"]])}${messageFields}</fieldset>
+      <fieldset><legend>Morning message</legend>${this._modeButtons("message", messageMode, [["off", "Off"], ["greeting", "Simple greeting"], ["assistant", "Assistant-written"]])}${assistantRepair}${messageFields}</fieldset>
       <details class="settings-panel" data-section="wake-limits" ${section("wake-limits")}><summary>Snooze and wake-up limits<span class="settings-summary" data-summary="wake-limits">${wakeSummary}${d.deadline ? ` · Get up by ${esc(d.deadline)}` : ""}</span></summary>
         ${this._check("snooze_enabled", "Allow snooze")}
         ${d.snooze_enabled ? `<div class="grid">${this._field("snooze_minutes", "Snooze minutes", "number", 'min="1" max="30" required')}${this._field("max_snoozes", "How many times?", "number", 'min="0" max="10" required')}</div>` : '<p>Snooze length and count are hidden while snooze is off.</p>'}
@@ -513,7 +517,7 @@ class HouseholdAlarmsCard extends HTMLElement {
     this._updateSectionSummaries();
     if (field === "speaker") { this._draft.music_track = ""; this._draft.music_track_name = ""; this._draft.music_server = ""; this._tracks = []; this._trackStatus = ""; this._trackError = false; this._choosingTrack = false; }
     if (field === "music_enabled" || field === "music_ramp_enabled" || field === "speaker") this._renderEditor();
-    if (field === "phone_enabled" || field === "phone_service" || field === "snooze_enabled" || field === "notify_enabled") this._renderEditor();
+    if (field === "assistant_id" || field === "phone_enabled" || field === "phone_service" || field === "snooze_enabled" || field === "notify_enabled") this._renderEditor();
     if (field === "mode") {
       if (input.value === "school") {
         this._draft.allow_sleep_in = false;
@@ -566,10 +570,18 @@ class HouseholdAlarmsCard extends HTMLElement {
 
   async _refresh() { this._data = await this._hass.callWS({ type: "household_alarms/list" }); }
 
+  _normalizeMessageConfig(config) {
+    const messageMode = this._editorModeMemory?.messageMode
+      ?? (config.briefing_enabled ? "assistant" : config.assistant_id ? "greeting" : "off");
+    config.briefing_enabled = messageMode === "assistant";
+    if (messageMode !== "assistant") config.schedule_enabled = false;
+    if (messageMode === "off") config.assistant_id = "";
+    return { config, messageMode };
+  }
+
   _save() {
     return this._operation(async () => {
-      const config = clone(this._draft);
-      const messageMode = this._editorModeMemory?.messageMode ?? (config.briefing_enabled ? "assistant" : config.assistant_id ? "greeting" : "off");
+      const { config, messageMode } = this._normalizeMessageConfig(clone(this._draft));
       const availableAssistant = (this._data.assistants || []).some((item) => item.id === config.assistant_id);
       if (config.tone === "none" && messageMode === "off") {
         this._message = "Choose a morning message before saving Voice only.";
@@ -584,9 +596,6 @@ class HouseholdAlarmsCard extends HTMLElement {
         this._focusAfterEditorRender = "assistant_id";
         return;
       }
-      config.briefing_enabled = messageMode === "assistant";
-      if (messageMode !== "assistant") config.schedule_enabled = false;
-      if (messageMode === "off") config.assistant_id = "";
       if (this._editingId) config.enabled = this._data.alarms.find((alarm) => alarm.id === this._editingId)?.enabled ?? config.enabled;
       else if (config.enabled && !window.confirm("Save and turn on this alarm? Please check its sound first.")) return;
       await this._hass.callWS({ type: "household_alarms/save", config,
@@ -698,7 +707,7 @@ class HouseholdAlarmsCard extends HTMLElement {
 
   async _openPreview() {
     if (!this._draft) return;
-    const config = clone(this._draft);
+    const { config } = this._normalizeMessageConfig(clone(this._draft));
     this._closePreview();
     const generation = this._previewGeneration;
     this._previewFocus = this.shadowRoot.activeElement;

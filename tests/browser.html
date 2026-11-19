@@ -201,6 +201,12 @@
     await set('schedule_include','Work\nDentist');
     await set('schedule_exclude','Cancelled');
     test('filters have clear precedence guidance', q('#editor').textContent.includes('Exclusions always win'));
+    await mode('message','greeting');
+    await click('preview');
+    const greetingPreview=calls.findLast((c) => c.type==='household_alarms/preview').config;
+    test('Simple-greeting Preview disables the briefing and clears its schedule dependency', !greetingPreview.briefing_enabled && !greetingPreview.schedule_enabled && greetingPreview.assistant_id==='pipeline-jarvis');
+    await click('close-preview');
+    await mode('message','assistant');
     await mode('message','off');
     test('Off hides spoken-message controls while retaining assistant and schedule draft choices', !q('[data-field="assistant_id"]') && !q('[data-field="instructions"]') && card._draft.schedule_enabled && card._draft.assistant_id==='pipeline-jarvis' && !q('[data-action="preview"]'));
     await mode('message','assistant');
@@ -217,6 +223,7 @@
     push(); await flush();
     test("runtime updates preserve editor and focus", q('[data-field="name"]') === focus && focus.value === typed);
     await set('speaker','');
+    const revokedBeforeMainPreview=revokedUrls.length;
     let resolvePreview;
     previewGate = new Promise((resolve) => {resolvePreview=resolve;});
     await click('preview');
@@ -227,7 +234,7 @@
     const playingAudio=q('#preview-dialog audio'); push(); await flush();
     test('runtime updates preserve preview playback', q('#preview-dialog audio')===playingAudio);
     await click('close-preview');
-    test('closing preview stops audio and revokes URL', !q('#preview-dialog') && mediaCalls.some(([action]) => action==='pause') && revokedUrls.length===1);
+    test('closing preview stops audio and revokes URL', !q('#preview-dialog') && mediaCalls.some(([action]) => action==='pause') && revokedUrls.length===revokedBeforeMainPreview+1);
     playbackError=new DOMException('blocked','NotAllowedError'); await click('preview');
     test('blocked autoplay offers Play button', q('#preview-status').textContent.includes('Press Play') && !q('[data-action="play-preview"]').hidden);
     playbackError=null; await click('play-preview');
@@ -257,6 +264,16 @@
     test("created alarm remains disabled", !data.alarms[0].enabled);
     test('schedule settings are saved per alarm', data.alarms[0].schedule_enabled && data.alarms[0].schedule_calendars.length===1);
     test('length and filters are saved per alarm', data.alarms[0].briefing_words===300 && data.alarms[0].schedule_include==='Work\nDentist' && data.alarms[0].schedule_exclude==='Cancelled');
+    const savedAlarm=deep(data.alarms[0]);
+    data.alarms[0].assistant_id='';
+    data.alarms[0].assistant_warning='Choose an assistant';
+    push(); await flush();
+    await click('edit');
+    test('editing a legacy spoken alarm explains the assistant repair needed to save', q('#editor').textContent.includes('spoken mode needs repair') && q('#editor').textContent.includes('Choose an available assistant below'));
+    await set('assistant_id','pipeline-jarvis');
+    test('repair guidance clears after choosing a usable assistant', !q('#editor').textContent.includes('spoken mode needs repair'));
+    await click('cancel');
+    data.alarms[0]=savedAlarm; push(); await flush();
     const editRect=q('[data-action="edit"]').getBoundingClientRect();
     const testRect=q('[data-action="test"]').getBoundingClientRect();
     const deleteRect=q('[data-action="delete"]').getBoundingClientRect();
