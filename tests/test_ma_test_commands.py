@@ -54,7 +54,8 @@ class MACommandTests(unittest.IsolatedAsyncioTestCase):
         exec('class Host:\n' + source, namespace)
         self.host = namespace['Host']()
         self.queue = types.SimpleNamespace(state=State.IDLE, repeat_mode='off',
-                                            autoplay_enabled=False, overlay_enabled=False)
+                                            autoplay_enabled=False, overlay_enabled=False,
+                                            current_item=None, current_index=None, index_in_buffer=None)
         self.data = types.SimpleNamespace(queue=self.queue, items=[], session_id=None)
         self.player = types.SimpleNamespace(state=types.SimpleNamespace(
             type='player', active_group=None, synced_to=None, group_members=[],
@@ -66,6 +67,7 @@ class MACommandTests(unittest.IsolatedAsyncioTestCase):
             streams=types.SimpleNamespace(audio=types.SimpleNamespace(briefings=self.mixer)),
             players=types.SimpleNamespace(get_player=lambda _: self.player, cmd_volume_set=volume))
         self.host._queue_data = {'Kitchen': self.data}
+        self.host.update_items = lambda queue, items: setattr(self.data, 'items', items)
         self.host.get = lambda _: self.queue
         def permission(_):
             if self.denied:
@@ -88,6 +90,7 @@ class MACommandTests(unittest.IsolatedAsyncioTestCase):
             if briefing_owner is not None:
                 await volume(queue, briefing_owner['volume_level'])
             self.queue.state = self.player.state.playback_state = State.PLAYING
+            self.queue.current_item = next(i for i in self.data.items if i.queue_item_id == item)
             self.player.state.active_source = queue
         self.host._play_index = play_index
         async def stop(queue):
@@ -221,6 +224,58 @@ class MACommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['protocol'], 2)
         self.assertIn('speech_delay', result['features'])
         self.assertFalse(self.calls)
+
+    async def test_production_preserves_existing_tracks_and_starts_alarm_immediately(self):
+        for active in (False, True):
+            with self.subTest(active=active):
+                original = [types.SimpleNamespace(uri='library://track/1', queue_item_id='old-1'),
+                            types.SimpleNamespace(uri='library://track/2', queue_item_id='old-2')]
+                self.data.items = original.copy()
+                self.queue.state = self.player.state.playback_state = State.PLAYING if active else State.IDLE
+                run = f'preserve-{active}'
+                self.assertTrue((await self.host.alarm_capabilities('Kitchen'))['ready'])
+                await self.host.alarm_start('Kitchen', run, 'library://track/22')
+                self.assertEqual(self.data.items[:2], original)
+                self.assertEqual(self.queue.current_item.queue_item_id, 'test-item')
+                await self.host.alarm_control('Kitchen', run, 'snooze')
+                await self.host.alarm_control('Kitchen', run, 'restart')
+                self.assertEqual(len(self.data.items), 3)
+                await self.host.alarm_control('Kitchen', run, 'stop')
+                self.assertEqual(self.data.items, original)
+
+    async def test_production_does_not_stop_later_user_playback(self):
+        await self.host.alarm_start('Kitchen', 'takeover', 'library://track/22')
+        user = types.SimpleNamespace(uri='library://track/2', queue_item_id='user')
+        self.data.items.append(user)
+        self.queue.current_item = user
+        result = await self.host.alarm_control('Kitchen', 'takeover', 'stop')
+        self.assertFalse(result['owned'])
+        self.assertNotIn('stop', self.calls)
+        self.assertIn(user, self.data.items)
+
+    async def test_production_duplicate_uri_is_identified_by_queue_item_not_song(self):
+        existing = types.SimpleNamespace(uri='library://track/22', queue_item_id='old-copy')
+        self.data.items = [existing]
+        await self.host.alarm_start('Kitchen', 'same-song', 'library://track/22',
+            message='Good morning', tts_engine='ha/tts.piper')
+        await self.host.alarm_control('Kitchen', 'same-song', 'snooze')
+        await self.host.alarm_control('Kitchen', 'same-song', 'restart')
+        self.assertEqual(self.calls.count('prepare'), 1)
+        self.assertEqual(self.data.items[0], existing)
+        await self.host.alarm_control('Kitchen', 'same-song', 'stop')
+        self.assertEqual(self.data.items, [existing])
+
+    async def test_production_uncertain_enqueue_is_never_duplicated(self):
+        original = self.host.play_media
+        async def lost_response(*args, **kwargs):
+            await original(*args, **kwargs)
+            raise ValueError('response lost')
+        self.host.play_media = lost_response
+        with self.assertRaises(ValueError):
+            await self.host.alarm_start('Kitchen', 'lost', 'library://track/22')
+        with self.assertRaisesRegex(ValueError, 'already attempted'):
+            await self.host.alarm_start('Kitchen', 'lost', 'library://track/22')
+        self.assertEqual(len(self.data.items), 1)
 
     async def test_production_selected_song_delay_and_music_only_start(self):
         result = await self.host.alarm_start('Kitchen', 'scheduled-1', 'library://track/22',

@@ -58,9 +58,18 @@ class HouseholdAlarmsCard extends HTMLElement {
   connectedCallback() {
     this._render();
     if (this._hass) this._connect();
+    // Re-evaluate local calendar dates even if HA sends no alarm state change.
+    clearInterval(this._dateTimer);
+    this._dateTimer = setInterval(() => {
+      const day = new Intl.DateTimeFormat("en-GB", {
+        timeZone: this._hass?.config?.time_zone || "UTC",
+      }).format(new Date());
+      if (day !== this._renderedDay) this._renderList();
+    }, 30000);
   }
 
   disconnectedCallback() {
+    clearInterval(this._dateTimer);
     this._closePreview();
     this._generation++;
     this._unsubscribe?.();
@@ -272,6 +281,7 @@ class HouseholdAlarmsCard extends HTMLElement {
       .alarm-actions{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:stretch}.alarm-actions button{width:100%;box-sizing:border-box;white-space:nowrap}.alarm-actions [data-action=delete]{grid-column:1/-1}
       dialog{box-sizing:border-box;width:min(560px,calc(100vw - 24px));max-height:85vh;overflow:auto;border:1px solid var(--divider-color);border-radius:16px;padding:20px;background:var(--card-background-color,#191919);color:var(--primary-text-color)}dialog::backdrop{background:#0009}dialog audio{width:100%;margin:12px 0}dialog .preview-text{white-space:pre-wrap;overflow-wrap:anywhere}
       @media(max-width:520px){.grid{grid-template-columns:1fr}.full{grid-column:auto}ha-card{padding:14px}.alarm-heading{gap:8px}.time{font-size:25px}.name{font-size:16px}.active-actions button{flex:1}}
+      .next-occurrence{display:inline-block;max-width:100%;white-space:nowrap;font-weight:400;font-size:clamp(11px,3cqi,14px)}
       ha-card{container-type:inline-size}
       @container (max-width:520px){.grid{grid-template-columns:1fr}.full{grid-column:auto}.alarm-row{grid-template-columns:minmax(0,1fr) auto;gap:8px}.alarm-tools{grid-template-columns:repeat(2,44px);grid-template-rows:repeat(2,44px)}}
     </style><ha-card><header><h2>Alarms</h2><button class="primary" data-action="new" ${!this._data ? "disabled" : ""}>＋ Add alarm</button></header>
@@ -285,7 +295,28 @@ class HouseholdAlarmsCard extends HTMLElement {
     this._configureEntitySelectors();
   }
 
+  _nextOccurrence(alarm, now = new Date()) {
+    if (!alarm.enabled || !alarm.next) return "Not scheduled";
+    const next = new Date(alarm.next);
+    if (!Number.isFinite(next.getTime())) return "Not scheduled";
+    const timeZone = this._hass?.config?.time_zone || "UTC";
+    const parts = (date) => Object.fromEntries(new Intl.DateTimeFormat("en-GB", {
+      timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+    }).formatToParts(date).map(({ type, value }) => [type, value]));
+    const n = parts(next), today = parts(now);
+    // Compare calendar dates, not elapsed hours: DST days need not be 24 hours.
+    const day = (p) => Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day));
+    const delta = Math.round((day(n) - day(today)) / 86400000);
+    const label = delta === 0 ? "Today" : delta === 1 ? "Tomorrow"
+      : `${n.day}/${n.month}/${n.year.slice(-2)}`;
+    return `${label} at ${Number(n.hour)}:${n.minute}`;
+  }
+
   _renderList() {
+    this._renderedDay = new Intl.DateTimeFormat("en-GB", {
+      timeZone: this._hass?.config?.time_zone || "UTC",
+    }).format(new Date());
     const list = this.shadowRoot.querySelector("#list");
     if (!list) return;
     list.hidden = !!this._draft;
@@ -301,13 +332,13 @@ class HouseholdAlarmsCard extends HTMLElement {
         const schedule = { school: "School days", non_school: "Non-school days", once: alarm.date,
           weekdays: weekdays.length === 5 && weekdays.every((day, index) => day === index)
             ? "Weekdays" : weekdays.map((day) => DAYS[day]).join(", ") }[alarm.mode];
-        const next = alarm.next ? new Date(alarm.next).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }) : "Not scheduled";
+        const next = this._nextOccurrence(alarm);
         const label = alarm.name;
         return `<section class="alarm" data-id="${esc(alarm.id)}"><div class="alarm-row"><div class="alarm-copy">
           <div class="alarm-heading"><span class="time">${esc(alarm.time)}</span><span class="name">${esc(label)}</span>${active ? `<span class="pill">${run.status === "snoozed" ? "Snoozing" : "Ringing"}</span>` : ""}</div>
           <p class="alarm-meta">${esc(schedule)} · ${esc(speaker)}</p>
-          <p class="alarm-meta">Next ${esc(next)}${alarm.deadline ? " · Get up by " + esc(alarm.deadline) : ""}</p>
-          ${run?.error ? `<details class="playback-warning"><summary>Playback needs attention</summary><p>${esc(run.error)}</p></details>` : ""}
+          <p class="alarm-meta"><span class="next-occurrence"><strong>Next:</strong> ${esc(next)}</span>${alarm.deadline ? " · Get up by " + esc(alarm.deadline) : ""}</p>
+          ${run?.error ? `<details class="playback-warning"><summary>Playback failed — details</summary><p>${esc(run.error)}</p></details>` : ""}
           ${alarm.assistant_warning ? `<div class="notice">${esc(alarm.assistant_warning)}</div>` : ""}
           ${this._data.test_results?.[alarm.id] ? `<div class="notice">${esc(this._data.test_results[alarm.id])}</div>` : ""}
           </div><div class="alarm-tools">${this._power(alarm.enabled, alarm.id, active || this._busy, `Turn ${alarm.name} ${alarm.enabled ? "off" : "on"}`)}
@@ -358,7 +389,7 @@ class HouseholdAlarmsCard extends HTMLElement {
       soundMode === "voice" ? `<p class="mode-help">Voice only uses your selected morning message. Choose one below.</p>` : "",
       soundMode === "voice" && messageMode === "off" ? '<p class="error" role="alert">Choose a morning message to use Voice only.</p>' : "",
       soundMode === "music" ? [
-        '<p class="mode-help">Requires the pinned HA-AlarmClock MA companion and an idle, empty, ungrouped queue. Music repeats until stopped; Snooze restarts the same song without the message.</p>',
+        '<p class="mode-help">Requires the updated HA-AlarmClock MA companion and one ungrouped speaker. The alarm starts its song immediately, preserving existing queued tracks. Music repeats until stopped; Snooze restarts the same song without the message.</p>',
         this._songPicker(),
         `<div class="grid">${this._field("start_volume", "Starting speaker volume (%)", "number", 'min="1" max="100" required')}</div>`,
         this._check("music_ramp_enabled", "Increase speaker volume over time"), musicRampFields,

@@ -4,6 +4,22 @@ This is a **project-only build recipe**, not an installed or validated app image
 The integration's music path requires companion protocol **2**, not the old DEV
 test API. Ordinary tone/voice alarms do not require this package.
 
+### Issue #4 queue-preservation extension
+
+Current templates advertise protocol 2 plus `preserve_queue`. Scheduled alarms
+and confirmed saved-alarm Tests can append/start an alarm item on a nonempty or
+playing queue, without discarding existing tracks. Only the alarm item is removed
+after an owned stop. A later user playback/session is never stopped by stale
+alarm controls. Enqueue attempts are consumed before preparation/dispatch so an
+uncertain response cannot duplicate the alarm song.
+
+The older protocol-1 experimental random-song test remains idle/empty-only;
+it is not the saved-alarm Test. Grouping, Repeat, Autoplay and ambient overlays
+remain unsupported. The old `7aab695...` deployment lacks this capability.
+Publish/install a regenerated companion before deploying integration 0.7.0b5.
+Empty, stopped-nonempty and active queues still require live speaker acceptance;
+offline command tests are not an audible result.
+
 See the [morning deployment handoff](../../docs/DEPLOYMENT_HANDOFF.md) for the
 current stop point and step-by-step transfer/build/verification sequence. Do not
 uninstall DEV before the replacement is tested and its data backed up.

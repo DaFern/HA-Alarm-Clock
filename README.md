@@ -12,7 +12,27 @@ Standard tone and spoken alarms use Home Assistant and can run without Music Ass
 
 The current scheduled-song mode, including music-only alarms and voice over music, requires the project's patched Music Assistant server with protocol 2. Keep the Music option off on stock Music Assistant while upstream support is pending. The patched server is optional for users who want to test scheduled music now.
 
-## Current candidate: 0.7.0b2
+## Current candidate: 0.7.0b5
+
+### Issue #4 follow-up: next dates and preserved music queues
+
+The card uses Home Assistant's timezone for **Next: Today / Tomorrow / dd/mm/yy**
+labels and refreshes them across local midnight. Disabled alarms show
+**Next: Not scheduled**.
+
+Scheduled music and confirmed saved-alarm Tests now require companion protocol 2
+with `preserve_queue`. The updated companion appends one uniquely owned alarm
+item, starts it immediately even over existing playback, and preserves the prior
+queue items in order. Snooze resumes that same item without speech; Dismiss stops
+only the owned session and removes only the alarm item. It does not automatically
+resume the interrupted user music. Repeat, Autoplay, grouped speakers and ambient
+overlays remain unsupported and are reported before playback.
+
+**Deployment gate:** the previously pinned DEV companion lacks `preserve_queue`.
+Install and verify the updated companion before deploying the new integration;
+otherwise scheduled music will deliberately report an incompatible companion.
+The changes below are deployment history, not evidence of this queue behavior
+being physically tested.
 
 ### Project-only follow-up: timed music-volume ramp (issue #3)
 

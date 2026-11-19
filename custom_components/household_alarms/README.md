@@ -1,4 +1,23 @@
-# HA-AlarmClock 0.7.0b2 — deployed candidate
+# HA-AlarmClock 0.7.0b5 — candidate
+
+## Issue #4: next occurrence and queue behavior
+
+Next occurrence dates use HA's configured timezone and local calendar dates,
+including DST and year boundaries: **Next:** Today at 10:53, Tomorrow at 9:00,
+or 23/11/26 at 9:00. Disabled alarms show Not scheduled.
+
+Music alarms and the confirmed saved-alarm Test require companion protocol 2
+with `preserve_queue`. They append a unique alarm item and start it immediately,
+preserving existing queue tracks and their order. Snooze reuses that item without
+speech. Dismiss stops only the still-owned session and removes only its item;
+it does not resume the previous song automatically. Later user playback is not
+stopped. Repeat, Autoplay, grouping and ambient overlays still block playback.
+Failures appear beside the alarm under **Playback failed — details**.
+
+The previous deployed companion does not implement `preserve_queue`. Upgrade
+the companion first; the integration rejects old companions rather than silently
+using incompatible queue behavior. Physical queue-state acceptance remains pending.
+The sections below include older deployed/test history.
 
 ## Song picker and optional lock-screen controls (phone acceptance pending)
 
@@ -171,8 +190,9 @@ The separate local-app recipe is prepared under
 It has a separate app identity/data directory and an exact upstream image digest,
 with hash-guarded source patching at build time and no startup Git installation.
 Disable Supervisor automatic updates when installing it; this cannot be enforced
-by its manifest. Busy/nonempty/grouped queues, Repeat, Autoplay and ambient
-overlay are rejected rather than changed or replaced automatically.
+by its manifest. The older deployment rejected busy/nonempty queues; current
+scheduled-alarm templates preserve them as described above. Grouped queues,
+Repeat, Autoplay and ambient overlay are still rejected rather than changed.
 
 The user confirmed a full-song playthrough, simultaneous briefing, Dismiss and
 Snooze on the earlier DEV prototype. **The intermittent Echo song/chapter restart

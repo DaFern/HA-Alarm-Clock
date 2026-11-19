@@ -105,6 +105,15 @@
   };
   try {
     await flush();
+    hass.config={time_zone:'Europe/London'};
+    const nextText=(next, now, enabled=true) => card._nextOccurrence({next,enabled},new Date(now));
+    test('same-day Thursday says Today in HA timezone', nextText('2026-11-19T10:53:00Z','2026-11-19T09:00:00Z')==='Today at 10:53');
+    test('next day says Tomorrow across a year boundary', nextText('2027-01-01T09:00:00Z','2026-12-31T23:30:00Z')==='Tomorrow at 9:00');
+    test('next day says Tomorrow across a month boundary', nextText('2026-12-01T09:00:00Z','2026-11-30T09:00:00Z')==='Tomorrow at 9:00');
+    test('later dates use dd/mm/yy and 24-hour time', nextText('2026-11-23T09:00:00Z','2026-11-19T09:00:00Z')==='23/11/26 at 9:00');
+    test('disabled alarms are not scheduled even with a stale next value', nextText('2026-11-23T09:00:00Z','2026-11-19T09:00:00Z',false)==='Not scheduled');
+    test('HA local dates handle UTC midnight and summer offset', nextText('2026-07-02T00:30:00Z','2026-07-01T23:30:00Z')==='Today at 1:30');
+    test('tomorrow uses calendar dates across DST', nextText('2026-03-29T08:00:00Z','2026-03-28T09:00:00Z')==='Tomorrow at 9:00');
     test("empty list renders", q("#list").textContent.includes("No alarms yet"));
     test('experimental panel removed and card load never plays', !q('[data-music-field="enabled"]') && !q('[data-action="music-start"]') && !calls.some((c) => c.type==='household_alarms/music_start'));
     await click("new");
@@ -289,14 +298,15 @@
     test('visible icon face is smaller than its hit target', parseFloat(getComputedStyle(q('[data-action="edit"]'),'::before').width)<editRect.width);
     test('icon actions expose names, tooltips and visible SVGs', q('[data-action="edit"]').getAttribute('aria-label').includes('Edit School') && q('[data-action="edit"]').title.includes('Edit School') && q('[data-action="test"] svg') && q('[data-action="delete"] svg') && !q('[data-action="edit"]').textContent.trim());
     test('compact header has no intro copy or redundant person', !q('#list').textContent.includes('Choose when and where') && !q('#list').textContent.includes('Charlotte'));
-    test('weekday schedule summary and next occurrence are concise', q('.alarm-meta').textContent.includes('Weekdays') && q('.alarm-meta').textContent.includes("Lottie's Speaker") && [...qAll('.alarm-meta')].some((node) => node.textContent.startsWith('Next ')));
+    test('weekday schedule summary and next occurrence are concise', q('.alarm-meta').textContent.includes('Weekdays') && q('.alarm-meta').textContent.includes("Lottie's Speaker") && [...qAll('.alarm-meta')].some((node) => node.textContent.startsWith('Next: ')));
     test('immediate switch has an alarm-specific accessible label', q('#list .power').getAttribute('aria-label')==='Turn School <img src=x onerror="window.attacked=true"> on');
     test("alarm labels are HTML-escaped", !q("#list img") && !window.attacked);
     data.alarms[0].next='2026-11-18T07:30:00Z';
     data.alarms[0].deadline='07:45'; push(); await flush();
-    test('next occurrence and deadline share compact metadata', [...qAll('.alarm-meta')].some((node) => node.textContent.includes('Next ') && node.textContent.includes('Get up by 07:45')));
+    test('next occurrence and deadline share compact metadata', [...qAll('.alarm-meta')].some((node) => node.textContent.includes('Next: ') && node.textContent.includes('Get up by 07:45')));
+    test('Next label is bold and its date stays together', q('.next-occurrence strong').textContent==='Next:' && getComputedStyle(q('.next-occurrence')).whiteSpace==='nowrap');
     data.alarms[0].run={status:'dismissed',snoozes:0,error:'Music Assistant did not confirm playback. Full error detail.'}; push(); await flush();
-    test('playback warning starts as one collapsed line', q('.playback-warning summary').textContent==='Playback needs attention' && !q('.playback-warning').open && !q('.playback-warning p').hidden);
+    test('playback warning starts as one collapsed line', q('.playback-warning summary').textContent==='Playback failed — details' && !q('.playback-warning').open && !q('.playback-warning p').hidden);
     q('.playback-warning summary').click(); await flush();
     test('expanding warning reveals full error', q('.playback-warning').open && q('.playback-warning p').textContent.includes('Full error detail'));
     data.alarms[0].run=null; push(); await flush();

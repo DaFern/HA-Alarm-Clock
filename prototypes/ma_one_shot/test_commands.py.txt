@@ -1,6 +1,6 @@
     @api_command("player_queues/briefing_test_capabilities", required_scope=Scope.QUEUES_CONTROL)
     @handle_play_action
-    async def briefing_test_capabilities(self, queue_id: str) -> dict[str, Any]:
+    async def briefing_test_capabilities(self, queue_id: str, preserve_queue: bool = False) -> dict[str, Any]:
         """Read-only readiness and engine identities; never speech or audio locations."""
         self._check_player_permission(queue_id)
         queue = self.get(queue_id)
@@ -11,9 +11,9 @@
         if (player.state.type == PlayerType.GROUP or player.state.active_group
                 or player.state.synced_to or len(player.state.group_members or ()) > 1):
             reasons.append("Choose one ungrouped speaker")
-        if queue.state != PlaybackState.IDLE or player.state.playback_state != PlaybackState.IDLE:
+        if not preserve_queue and (queue.state != PlaybackState.IDLE or player.state.playback_state != PlaybackState.IDLE):
             reasons.append("Stop existing playback before testing")
-        if self._queue_data[queue_id].items:
+        if not preserve_queue and self._queue_data[queue_id].items:
             reasons.append("Use an empty development queue; existing queues are not replaced")
         if queue.repeat_mode != RepeatMode.OFF or queue.autoplay_enabled:
             reasons.append("Turn off Repeat and Autoplay on the development queue")
@@ -86,8 +86,15 @@
         player = self.mass.players.get_player(queue_id)
         if action == "stop":
             mixer.reject_run(queue_id, run_id)
-        if (owner is None or player is None or len(data.items) != 1
-                or data.items[0].queue_item_id != owner["item_id"]
+        preserve = owner is not None and owner.get("preserve_queue", False)
+        item_ids = [item.queue_item_id for item in data.items] if preserve else []
+        if (owner is None or player is None
+                or (preserve and (owner["item_id"] not in item_ids
+                    or (data.queue.state != PlaybackState.IDLE
+                        and (data.queue.current_item is None
+                             or data.queue.current_item.queue_item_id != owner["item_id"]))))
+                or (not preserve and (len(data.items) != 1
+                    or data.items[0].queue_item_id != owner["item_id"]))
                 or player.state.active_source not in (None, queue_id)
                 or player.state.active_group or player.state.synced_to
                 or player.state.type == PlayerType.GROUP
@@ -107,5 +114,14 @@
                 if (player.state.volume_level == owner["volume_level"]
                         and isinstance(owner["original_volume"], int)):
                     await self.mass.players.cmd_volume_set(queue_id, owner["original_volume"])
-                self._clear(queue_id, skip_stop=True)
+                if preserve:
+                    # Never clear the user's queue. Remove only this run's unique item,
+                    # after a confirmed stop and while still holding the queue lock.
+                    data.queue.current_index = None
+                    data.queue.index_in_buffer = None
+                    self.update_items(queue_id, [
+                        item for item in data.items if item.queue_item_id != owner["item_id"]
+                    ])
+                else:
+                    self._clear(queue_id, skip_stop=True)
         return {"protocol": 1, "owned": True, "state": data.queue.state.value}

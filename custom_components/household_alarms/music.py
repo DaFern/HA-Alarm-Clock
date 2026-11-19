@@ -12,7 +12,7 @@ from .ma_audio import resolve_client, resolve_server_id
 from .model import AlarmError, volume
 
 PROTOCOL = 2
-FEATURES = {"selected_track", "speech_delay", "music_only"}
+FEATURES = {"selected_track", "speech_delay", "music_only", "preserve_queue"}
 
 
 async def command(client, name, *, timeout=90, **data):
@@ -29,7 +29,7 @@ async def command(client, name, *, timeout=90, **data):
 async def capabilities(client, queue_id):
     result = await command(client, "player_queues/alarm_capabilities", queue_id=queue_id, timeout=15)
     if not isinstance(result, dict) or result.get("protocol") != PROTOCOL or not FEATURES <= set(result.get("features", [])):
-        raise AlarmError("Music alarms require the compatible pinned HA-AlarmClock MA companion (protocol 2)")
+        raise AlarmError("Music alarms require the updated HA-AlarmClock MA companion (protocol 2 with preserve_queue)")
     return result
 
 

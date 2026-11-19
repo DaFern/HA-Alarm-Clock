@@ -286,3 +286,29 @@ https://github.com/music-assistant/support/discussions/998#discussioncomment-196
 
 GitHub issue #1 remains relevant to assistant voice/preview/dismissal work.
 The deployment follow-up issue should remain open until the checks above pass.
+## 2026-11-19: issue #4 queue-preservation candidate
+
+The regenerated companion was published to the existing upstream fork at
+`DaFern/server@46b4183f2ddba04082fdad322ce685ff5aff18a3`; its AST matched the
+project generator. Ruff and targeted mypy passed. HA+DEV partial backup
+`ffa20773` completed before the DEV change. DEV's source-pin syntax is
+`DaFern/server@<commit>` (not a full URL). DEV started on the new source, but
+Plex queue-sync errors and an `alarm_start` connection failure were observed.
+An active Test alarm blocked the matching HA deployment; do not restart over it.
+The server repository is already a genuine fork of `music-assistant/server`.
+The requested app fork of `music-assistant/home-assistant-addon` remains pending.
+
+Integration 0.7.0b5 requires `preserve_queue` on the protocol-2 companion.
+The updated source also includes the earlier volume-ramp extension. The old
+`7aab695...` DEV build is incompatible with the new scheduled-music contract.
+Do not deploy the new HA runtime until the updated companion is installed and
+its capability response is verified. Keep DEV/stable data and rollback copies.
+No separate GitHub forks or packaged-app migration are included in this change.
+
+The card's Next label uses HA-local Today/Tomorrow/calendar dates, refreshes
+across midnight, and uses dd/mm/yy plus 24-hour time for later dates.
+Queue tests must cover empty, stopped with existing tracks, and active music:
+immediate alarm playback, retained tracks, speech once, Snooze without speech,
+Dismiss removing only the alarm item, duplicate/lost-response safety, and later
+user playback not stopped by stale controls. Offline checks do not close these
+live acceptance gates.

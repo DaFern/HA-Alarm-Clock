@@ -55,7 +55,12 @@ The adapter uses MA's own `ComplexFilterInput`, `ComplexFilter` and
   PCM and F32 are supported; normal player encoding/DSP remains downstream.
 
 MA still owns provider playback and output encoding. The mixer does not choose
-songs or call `play_announcement`. The companion manual-test commands now load
+songs or call `play_announcement`. The protocol-2 scheduled-alarm and saved Test
+commands advertise `preserve_queue`: append a unique alarm item, preserve the
+previous items/order and start the new item immediately. Owned Dismiss removes
+only that item; Snooze reuses it without a second briefing. Enqueue attempts are
+tombstoned independently of speech claims, and controls reject a later user's
+current item or session. The protocol-1 experimental manual-test commands load
 one explicitly selected library track into an **empty** queue and set a bounded
 test volume. They refuse existing playback, Repeat, Autoplay or ambient overlays
 rather than replacing queues or changing those settings. HA selects the random
