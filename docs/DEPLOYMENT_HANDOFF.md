@@ -151,7 +151,7 @@ The updated MA patch was committed and successfully pushed to the fork:
 DEV must use this exact `server_repo` value:
 
 ```text
-DaFern/server@7aab695417cea5d0fdf926620724cfd873ef1c22
+DaFern/music-assistant-alarm-clock-server@7aab695417cea5d0fdf926620724cfd873ef1c22
 ```
 
 The published helper and seven relevant queue methods match the tested project
@@ -289,10 +289,10 @@ The deployment follow-up issue should remain open until the checks above pass.
 ## 2026-11-19: issue #4 queue-preservation candidate
 
 The regenerated companion was published to the existing upstream fork at
-`DaFern/server@46b4183f2ddba04082fdad322ce685ff5aff18a3`; its AST matched the
+`DaFern/music-assistant-alarm-clock-server@46b4183f2ddba04082fdad322ce685ff5aff18a3`; its AST matched the
 project generator. Ruff and targeted mypy passed. HA+DEV partial backup
 `ffa20773` completed before the DEV change. DEV's source-pin syntax is
-`DaFern/server@<commit>` (not a full URL). DEV started on the new source, but
+`DaFern/music-assistant-alarm-clock-server@<commit>` (not a full URL). DEV started on the new source, but
 Plex queue-sync errors and an `alarm_start` connection failure were observed.
 An active Test alarm initially blocked HA deployment. After it cleared, the user
 approved proceeding despite those earlier playback errors. Integration 0.7.0b5
@@ -304,7 +304,7 @@ test was performed, so physical queue-state acceptance remains pending.
 Runtime rollback files are at
 `/data/v2/cache/opencode/household_alarms-before-0.7.0b5-20261119T115306Z`.
 The server repository is already a genuine fork of `music-assistant/server`;
-`DaFern/home-assistant-addon` was created and verified as a genuine fork of
+`DaFern/music-assistant-alarm-clock-app` was created and verified as a genuine fork of
 `music-assistant/home-assistant-addon`. No app from that new fork was installed.
 
 Integration 0.7.0b5 requires `preserve_queue` on the protocol-2 companion.
