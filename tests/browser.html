@@ -128,15 +128,23 @@
     }) && q('[data-field="speaker"]').required && !q('[data-field="calendar"]').required);
     {
       const selector=q('[data-field="speaker"]');
-      const pushState=history.pushState, back=history.back, blur=selector.blur;
-      let pushed=false, blurred=false;
+      const pushState=history.pushState, back=history.back;
+      const sheet={open:true};
+      const picker={localName:'ha-generic-picker',shadowRoot:{querySelector:(name)=>name==='ha-bottom-sheet'?sheet:null}};
+      let pushed=false, backCalls=0;
       history.pushState=()=>{pushed=true;};
-      history.back=()=>{};
-      selector.blur=()=>{blurred=true;};
-      card._entitySearchFocused({composedPath:()=>[selector]});
+      history.back=()=>{backCalls++;};
+      const event={composedPath:()=>[picker,selector]};
+      card._entityPickerOpened(event);
       card._handleEntitySearchBack();
-      test('phone Back closes an open entity search before navigating', pushed && blurred && !card._entitySearchHistoryEntry);
-      history.pushState=pushState; history.back=back; selector.blur=blur;
+      const backClosesPicker=pushed && !sheet.open && !card._entityPickerHistoryEntry && backCalls===0;
+      sheet.open=true;
+      card._entityPickerOpened(event);
+      card._entityPickerClosed(event);
+      const closingPickerRemovesHistory=backCalls===1 && card._entityPickerHistoryCleanup;
+      card._handleEntitySearchBack();
+      test('picker-opened/picker-closed manage Back so it closes the phone entity picker first', backClosesPicker && closingPickerRemovesHistory && !card._entityPickerHistoryEntry);
+      history.pushState=pushState; history.back=back;
     }
     test("duplicate enable checkbox was removed", !q('[data-field="enabled"]'));
     test("generic form has no preset family or assistant", !q('#people option') && !card._draft.assistant_id && !card._draft.weather);
