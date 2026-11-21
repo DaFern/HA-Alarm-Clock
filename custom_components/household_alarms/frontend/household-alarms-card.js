@@ -23,7 +23,11 @@ class HouseholdAlarmsCard extends HTMLElement {
     this._trackStatus = "";
     this._trackError = false;
     this._trackSearching = false;
-    this._choosingTrack = false;
+    this._trackSearchTimer = null;
+    this._trackSearchGeneration = 0;
+    this._songPickerDialog = null;
+    this._songPickerHistoryEntry = false;
+    this._songPickerHistoryCleanup = false;
     this._entityPickerHistoryEntry = false;
     this._entityPickerHistoryCleanup = false;
     this._activeEntityPicker = null;
@@ -34,7 +38,7 @@ class HouseholdAlarmsCard extends HTMLElement {
     this.shadowRoot.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && event.target.hasAttribute("data-track-query")) {
         event.preventDefault();
-        this.shadowRoot.querySelector('[data-action="search-tracks"]')?.click();
+        this._scheduleTrackSearch(event.target.value, true);
       }
     });
     this.shadowRoot.addEventListener("toggle", (event) => {
@@ -80,6 +84,7 @@ class HouseholdAlarmsCard extends HTMLElement {
     window.removeEventListener("picker-closed", this._entityPickerClosed);
     clearInterval(this._dateTimer);
     this._closePreview();
+    this._closeSongPicker();
     this._generation++;
     this._unsubscribe?.();
     this._unsubscribe = null;
@@ -113,6 +118,15 @@ class HouseholdAlarmsCard extends HTMLElement {
   };
 
   _handleEntitySearchBack = () => {
+    if (this._songPickerHistoryEntry) {
+      this._songPickerHistoryEntry = false;
+      if (this._songPickerHistoryCleanup) {
+        this._songPickerHistoryCleanup = false;
+        return;
+      }
+      this._closeSongPicker();
+      return;
+    }
     if (!this._entityPickerHistoryEntry) return;
     this._entityPickerHistoryEntry = false;
     if (this._entityPickerHistoryCleanup) {
@@ -189,7 +203,7 @@ class HouseholdAlarmsCard extends HTMLElement {
     this._draft[field] = value;
     if (field === "speaker") {
       this._draft.music_track = ""; this._draft.music_track_name = ""; this._draft.music_server = "";
-      this._tracks = []; this._trackStatus = ""; this._trackError = false; this._choosingTrack = false;
+      this._tracks = []; this._trackStatus = ""; this._trackError = false;
       this._renderEditor();
     } else if (["calendar", "bedtime_entity"].includes(field)) {
       if (field === "calendar" && !value && this._draft.calendar_rule === "allow") this._draft.calendar_rule = "block";
@@ -319,6 +333,7 @@ class HouseholdAlarmsCard extends HTMLElement {
     this._closePreview();
     this.shadowRoot.innerHTML = `<style>
       .selected-track{border:2px solid var(--primary-color);border-radius:12px;padding:12px;margin:12px 0;background:var(--secondary-background-color);overflow-wrap:anywhere}.selected-track strong{display:block;margin-bottom:8px}#track-feedback{white-space:pre-wrap;overflow-wrap:anywhere}
+      .song-picker-dialog{box-sizing:border-box;width:min(560px,calc(100vw - 24px));max-height:85dvh;overflow:hidden;border:1px solid var(--divider-color);border-radius:16px;padding:0;background:var(--card-background-color,#191919);color:var(--primary-text-color)}.song-picker-dialog::backdrop{background:#0009}.song-picker-header{position:sticky;top:0;z-index:1;padding:18px 20px 8px;background:var(--card-background-color,#191919)}.song-picker-content{padding:0 20px 20px;overflow:auto;max-height:calc(85dvh - 76px)}.song-picker-content label{display:block;margin:8px 0}.song-picker-content input{box-sizing:border-box;width:100%;padding:10px 12px;border:1px solid var(--divider-color);border-radius:10px;background:var(--secondary-background-color);color:var(--primary-text-color)}.track-results{display:grid;gap:8px;margin-top:12px}.track-option{width:100%;text-align:left;overflow-wrap:anywhere}.song-picker-dialog .notice{margin:10px 0}.song-picker-dialog .notice:empty{display:none}
       :host{display:block;color:var(--primary-text-color);font-family:var(--paper-font-body1_-_font-family,system-ui)}
       ha-card{display:block;padding:18px;border-radius:var(--ha-card-border-radius,16px);background:var(--ha-card-background,var(--card-background-color));border:1px solid var(--divider-color)}
       header,.row,.actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}header{justify-content:space-between}h2{font-size:21px;margin:0}h3{font-size:17px;margin:0 0 8px}
@@ -326,8 +341,8 @@ class HouseholdAlarmsCard extends HTMLElement {
       button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible{outline:2px solid var(--primary-color);outline-offset:2px}.alarm{border-top:1px solid var(--divider-color);padding:14px 0}.alarm-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:16px}.alarm-copy{min-width:0}.alarm-heading{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}.time{font-size:26px;font-weight:650}.name{font-size:17px}.alarm-meta{margin:3px 0;color:var(--secondary-text-color);font-size:14px;line-height:1.45;overflow-wrap:anywhere}.alarm-tools{display:grid;grid-template-columns:repeat(4,44px);align-items:center;justify-content:end;gap:4px}.alarm-tools .power,.alarm-tools .icon-button{position:relative;box-sizing:border-box;width:44px;height:44px;min-width:44px;min-height:44px;padding:0;border:1px solid transparent;display:grid;place-items:center}.alarm-tools .power{gap:0}.alarm-tools .power strong{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}.alarm-tools .track{width:30px;height:18px;padding:2px}.alarm-tools .track span{width:14px;height:14px}.alarm-tools .is-on .track span{transform:translateX(12px)}.alarm-tools .icon-button::before{content:"";position:absolute;inset:5px;border:1px solid var(--divider-color);border-radius:8px;pointer-events:none}.alarm-tools .icon-button svg{width:20px;height:20px}.icon-button svg{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.pill{padding:4px 8px;background:var(--secondary-background-color);border-radius:8px;font-size:12px}.active-actions{justify-content:flex-start;margin-top:10px}.active-actions button{font-size:14px}.playback-warning{margin:5px 0 0;color:var(--error-color,#db4437);font-size:14px}.playback-warning summary{cursor:pointer;min-height:32px;line-height:32px}.playback-warning p{margin:4px 0 0;color:var(--error-color,#db4437);font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}.notice{white-space:pre-wrap;background:var(--secondary-background-color);padding:10px;border-radius:10px;font-size:13px;line-height:1.5;margin:8px 0}.error{color:var(--error-color,#db4437)}[hidden]{display:none!important}form{margin-top:18px;border-top:1px solid var(--divider-color);padding-top:18px}fieldset{border:1px solid var(--divider-color);border-radius:12px;margin:12px 0;padding:14px}legend{font-weight:600;padding:0 6px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.mode-select{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;margin:10px 0}.mode-select button{min-width:0;padding:8px 10px;font-size:14px}.mode-select button[aria-pressed="true"]{background:var(--primary-color);border-color:var(--primary-color);color:var(--text-primary-color,#fff)}.mode-help{margin:4px 0 10px;font-size:13px}label{display:flex;flex-direction:column;gap:6px;font-size:13px;min-width:0}input,select,textarea{box-sizing:border-box;width:100%;min-height:44px;font:inherit;color:var(--primary-text-color);background:var(--secondary-background-color);border:1px solid var(--divider-color);border-radius:8px;padding:10px}input[type=checkbox]{width:22px;min-height:22px;accent-color:var(--primary-color)}.check{flex-direction:row;align-items:center;gap:10px;padding:6px 0;min-height:32px}.days{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}.days label{position:relative;display:grid;place-items:center;box-sizing:border-box;min-width:44px;min-height:44px;padding:0 12px;border:1px solid var(--divider-color);border-radius:10px;cursor:pointer;user-select:none}.days label.selected{background:var(--primary-color);border-color:var(--primary-color);color:var(--text-primary-color,#fff)}.days label:focus-within{outline:2px solid var(--primary-color);outline-offset:2px}.days input[type=checkbox]{position:absolute;width:1px;height:1px;min-height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}textarea{min-height:110px;resize:vertical}.full{grid-column:1/-1}.preview{white-space:pre-wrap}.right{margin-left:auto}
       :host{font-size:16px}label,.actions button{font-size:16px}input,select,textarea{font-size:16px;min-height:48px}input[type=checkbox]{min-height:24px;width:24px}.check{min-height:44px}.power{display:inline-flex;align-items:center;gap:10px;min-width:104px;border:none}.track{display:inline-flex;align-items:center;width:46px;height:28px;border-radius:18px;background:var(--disabled-color,#777);padding:3px;box-sizing:border-box}.track span{display:block;width:22px;height:22px;border-radius:50%;background:#fff}.is-on .track{background:var(--primary-color)}.is-on .track span{transform:translateX(18px)}details{margin:18px 0;border-top:1px solid var(--divider-color);padding-top:14px}summary{font-weight:600;cursor:pointer;min-height:44px;line-height:44px}.settings-panel summary{height:auto;line-height:1.3;padding:5px 0;box-sizing:border-box}.settings-summary{display:block;margin-top:4px;color:var(--secondary-text-color);font-size:13px;font-weight:400;line-height:1.4}.editor-header{justify-content:space-between}.section-help{margin-bottom:0}a{color:var(--primary-color);display:inline-block;min-height:32px;line-height:32px}.notification-help{font-size:15px;line-height:1.6;padding-left:22px}
       .alarm-actions{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:stretch}.alarm-actions button{width:100%;box-sizing:border-box;white-space:nowrap}.alarm-actions [data-action=delete]{grid-column:1/-1}
-      dialog{box-sizing:border-box;width:min(560px,calc(100vw - 24px));max-height:85vh;overflow:auto;border:1px solid var(--divider-color);border-radius:16px;padding:20px;background:var(--card-background-color,#191919);color:var(--primary-text-color)}dialog::backdrop{background:#0009}dialog audio{width:100%;margin:12px 0}dialog .preview-text{white-space:pre-wrap;overflow-wrap:anywhere}
-      @media(max-width:520px){.grid{grid-template-columns:1fr}.full{grid-column:auto}ha-card{padding:14px}.alarm-heading{gap:8px}.time{font-size:25px}.name{font-size:16px}.active-actions button{flex:1}}
+       dialog{box-sizing:border-box;width:min(560px,calc(100vw - 24px));max-height:85vh;overflow:auto;border:1px solid var(--divider-color);border-radius:16px;padding:20px;background:var(--card-background-color,#191919);color:var(--primary-text-color)}dialog::backdrop{background:#0009}dialog audio{width:100%;margin:12px 0}dialog .preview-text{white-space:pre-wrap;overflow-wrap:anywhere}
+       @media(max-width:520px){.grid{grid-template-columns:1fr}.full{grid-column:auto}ha-card{padding:14px}.alarm-heading{gap:8px}.time{font-size:25px}.name{font-size:16px}.active-actions button{flex:1}.song-picker-dialog{margin:auto 0 0;width:100vw;max-width:none;max-height:90dvh;border-radius:20px 20px 0 0}.song-picker-content{max-height:calc(90dvh - 76px)}}
       .next-occurrence{display:inline-block;max-width:100%;white-space:nowrap;font-weight:400;font-size:clamp(11px,3cqi,14px)}
       ha-card{container-type:inline-size}
       @container (max-width:520px){.grid{grid-template-columns:1fr}.full{grid-column:auto}.alarm-row{grid-template-columns:minmax(0,1fr) auto;gap:8px}.alarm-tools{grid-template-columns:repeat(2,44px);grid-template-rows:repeat(2,44px)}}
@@ -530,18 +545,120 @@ class HouseholdAlarmsCard extends HTMLElement {
   _songPicker() {
     const d = this._draft;
     const selected = !!d.music_track;
-    return `<div id="track-feedback" class="${this._trackStatus ? "notice" : ""} ${this._trackError ? "error" : ""}" role="status" aria-live="polite" aria-busy="${this._trackSearching}">${esc(this._trackStatus)}</div>
-      ${selected ? `<div class="selected-track"><strong>✓ Selected song</strong><span>${esc(d.music_track_name || d.music_track)}</span><p>Save the alarm to keep any changes.</p><button type="button" data-action="change-track" ${this._busy ? "disabled" : ""}>Change song</button></div>` : '<p>No song selected yet.</p>'}
-      ${!selected || this._choosingTrack ? `<label>Search your speaker's MA song library<input data-track-query maxlength="100" value="${esc(this._trackQuery)}" placeholder="Song or artist" aria-describedby="track-feedback"></label>
-      <button type="button" data-action="search-tracks" ${this._busy || !d.speaker ? "disabled" : ""}>${this._trackSearching ? "Searching…" : "Search songs"}</button>
-      <div class="actions">${this._tracks.map((track, index) => `<button type="button" data-action="choose-track" data-track-index="${index}" aria-pressed="${d.music_track === track.uri}">${esc(track.name)}</button>`).join("")}</div>` : ""}`;
+    return `<div id="track-feedback" class="${this._trackStatus ? "notice" : ""} ${this._trackError ? "error" : ""}" role="status" aria-live="polite">${esc(this._trackStatus)}</div>
+      ${selected ? `<div class="selected-track"><strong>✓ Selected song</strong><span>${esc(d.music_track_name || d.music_track)}</span><p>Save the alarm to keep any changes.</p><button type="button" data-action="change-track" ${this._busy ? "disabled" : ""}>Change song</button></div>` : `<p>No song selected yet.</p><button type="button" data-action="choose-song" ${this._busy || !d.speaker ? "disabled" : ""}>Choose song</button>`}`;
+  }
+
+  _openSongPicker() {
+    if (!this._draft?.speaker || this._songPickerDialog) return;
+    const dialog = document.createElement("dialog");
+    dialog.className = "song-picker-dialog";
+    dialog.setAttribute("aria-labelledby", "song-picker-title");
+    dialog.innerHTML = `<header class="song-picker-header"><div><h3 id="song-picker-title">Choose a song</h3><button type="button" data-action="close-song-picker" aria-label="Close song search">Close</button></div></header>
+      <div class="song-picker-content"><p>Search the selected speaker's Music Assistant library.</p><label>Song or artist<input data-track-query maxlength="100" value="${esc(this._trackQuery)}" placeholder="Search songs" autocomplete="off" aria-describedby="song-picker-status"></label>
+      <div id="song-picker-status" class="notice" role="status" aria-live="polite" aria-busy="false">${this._trackQuery.trim() ? "Search your library…" : "Type a song or artist to search."}</div><div id="song-picker-results" class="track-results" role="listbox" aria-label="Songs"></div></div>`;
+    this._songPickerDialog = dialog;
+    dialog.addEventListener("cancel", (event) => { event.preventDefault(); dialog.close(); });
+    dialog.addEventListener("close", () => {
+      if (this._songPickerDialog === dialog) this._songPickerDialog = null;
+      dialog.remove();
+      clearTimeout(this._trackSearchTimer);
+      this._trackSearchTimer = null;
+      this._trackSearchGeneration++;
+      this._trackSearching = false;
+      if (this._songPickerHistoryEntry) {
+        this._songPickerHistoryCleanup = true;
+        history.back();
+      }
+      this.shadowRoot.querySelector('[data-action="change-track"], [data-action="choose-song"]')?.focus();
+    });
+    this.shadowRoot.append(dialog);
+    dialog.showModal();
+    const state = history.state && typeof history.state === "object" ? history.state : {};
+    history.pushState({ ...state, householdAlarmSongPicker: true }, "");
+    this._songPickerHistoryEntry = true;
+    this._trackStatus = "";
+    this._trackError = false;
+    this._tracks = [];
+    this._updateTrackStatus();
+    const input = dialog.querySelector("[data-track-query]");
+    input.focus();
+    if (this._trackQuery.trim()) this._scheduleTrackSearch(this._trackQuery, true);
+  }
+
+  _closeSongPicker() {
+    this._songPickerDialog?.close();
+  }
+
+  _scheduleTrackSearch(query, immediate = false) {
+    this._trackQuery = query;
+    clearTimeout(this._trackSearchTimer);
+    const generation = ++this._trackSearchGeneration;
+    const normalized = query.trim();
+    this._tracks = [];
+    this._trackSearching = false;
+    this._trackError = false;
+    if (!normalized) {
+      this._trackStatus = "Type a song or artist to search.";
+      this._updateTrackStatus();
+      return;
+    }
+    this._trackStatus = "";
+    this._updateTrackStatus();
+    this._trackSearchTimer = setTimeout(
+      () => this._searchTracks(normalized, generation),
+      immediate ? 0 : 300,
+    );
+  }
+
+  async _searchTracks(query, generation) {
+    if (generation !== this._trackSearchGeneration || !this._songPickerDialog) return;
+    this._trackSearching = true;
+    this._trackError = false;
+    this._trackStatus = "Searching the selected speaker's Music Assistant library…";
+    this._updateTrackStatus();
+    try {
+      const result = await this._hass.callWS({
+        type: "household_alarms/tracks",
+        speaker: this._draft.speaker,
+        query,
+      });
+      if (generation !== this._trackSearchGeneration || !this._songPickerDialog) return;
+      this._tracks = result.tracks;
+      this._trackServer = result.server_id;
+      this._trackStatus = this._tracks.length
+        ? "Choose a song below. Save the alarm to keep it."
+        : "No songs found. Add the song to this MA library, then search again.";
+    } catch (error) {
+      if (generation !== this._trackSearchGeneration || !this._songPickerDialog) return;
+      this._trackStatus = error.message || "Song search failed. Check the selected MA speaker.";
+      this._trackError = true;
+    } finally {
+      if (generation === this._trackSearchGeneration && this._songPickerDialog) {
+        this._trackSearching = false;
+        this._updateTrackStatus();
+      }
+    }
   }
 
   _updateTrackStatus() {
     const status = this.shadowRoot.querySelector("#track-feedback");
     if (status) { status.textContent = this._trackStatus; status.className = `notice ${this._trackError ? "error" : ""}`; status.setAttribute("aria-busy", String(this._trackSearching)); }
-    const button = this.shadowRoot.querySelector('[data-action="search-tracks"]');
-    if (button) button.textContent = this._trackSearching ? "Searching…" : "Search songs";
+    const dialogStatus = this._songPickerDialog?.querySelector("#song-picker-status");
+    if (dialogStatus) {
+      dialogStatus.textContent = this._trackStatus;
+      dialogStatus.className = `notice ${this._trackError ? "error" : ""}`;
+      dialogStatus.setAttribute("aria-busy", String(this._trackSearching));
+    }
+    this._renderTrackResults();
+  }
+
+  _renderTrackResults() {
+    const results = this._songPickerDialog?.querySelector("#song-picker-results");
+    if (!results) return;
+    results.innerHTML = this._tracks.map((track, index) =>
+      `<button type="button" class="track-option" role="option" aria-selected="${this._draft?.music_track === track.uri}" data-action="choose-track" data-track-index="${index}">${esc(track.name)}</button>`
+    ).join("");
   }
 
   _renderMusic(force = false) {
@@ -570,7 +687,7 @@ class HouseholdAlarmsCard extends HTMLElement {
 
   _input(event) {
     const input = event.target;
-    if (input.hasAttribute("data-track-query")) { this._trackQuery = input.value; return; }
+    if (input.hasAttribute("data-track-query")) { this._scheduleTrackSearch(input.value); return; }
     if (!this._draft || !input.dataset.field) return;
     if (input.tagName === "SELECT" || input.type === "checkbox") return;
     this._draft[input.dataset.field] = input.type === "number" ? Number(input.value) : input.value;
@@ -621,7 +738,7 @@ class HouseholdAlarmsCard extends HTMLElement {
     if (field === "tone" && input.value !== "none" && this._editorModeMemory) this._editorModeMemory.tone = input.value;
     if (field === "assistant_id" && this._editorModeMemory) this._editorModeMemory.assistantId = input.value;
     this._updateSectionSummaries();
-    if (field === "speaker") { this._draft.music_track = ""; this._draft.music_track_name = ""; this._draft.music_server = ""; this._tracks = []; this._trackStatus = ""; this._trackError = false; this._choosingTrack = false; }
+    if (field === "speaker") { this._draft.music_track = ""; this._draft.music_track_name = ""; this._draft.music_server = ""; this._tracks = []; this._trackStatus = ""; this._trackError = false; }
     if (field === "music_enabled" || field === "music_ramp_enabled" || field === "speaker") this._renderEditor();
     if (field === "assistant_id" || field === "phone_enabled" || field === "phone_service" || field === "snooze_enabled" || field === "notify_enabled") this._renderEditor();
     if (field === "mode") {
@@ -652,7 +769,7 @@ class HouseholdAlarmsCard extends HTMLElement {
       messageMode: this._draft.briefing_enabled ? "assistant" : this._draft.assistant_id ? "greeting" : "off",
     };
     this._tracks = []; this._trackQuery = "";
-    this._trackStatus = ""; this._trackError = false; this._trackSearching = false; this._choosingTrack = false;
+    this._trackStatus = ""; this._trackError = false; this._trackSearching = false;
     this._openSections = new Set();
     this._renderEditor();
     this.shadowRoot.querySelector("#editor")?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -733,20 +850,8 @@ class HouseholdAlarmsCard extends HTMLElement {
     const button = event.target.closest("button[data-action]");
     if (!button || button.disabled || this._busy) return;
     const action = button.dataset.action;
-    if (action === "search-tracks") {
-      await this._operation(async () => {
-        this._tracks = []; this._trackSearching = true; this._trackError = false;
-        this._trackStatus = "Searching the selected speaker's Music Assistant library…"; this._updateTrackStatus();
-        try {
-          const result = await this._hass.callWS({ type: "household_alarms/tracks", speaker: this._draft.speaker, query: this._trackQuery });
-          this._tracks = result.tracks; this._trackServer = result.server_id;
-          this._trackStatus = this._tracks.length ? "Choose a song below. Save the alarm to keep it." : "No songs found. Add the song to this MA library, then search again.";
-        } catch (error) {
-          this._trackStatus = error.message || "Song search failed. Check the selected MA speaker."; this._trackError = true;
-        } finally { this._trackSearching = false; }
-      });
-      return;
-    }
+    if (action === "choose-song") { this._openSongPicker(); return; }
+    if (action === "close-song-picker") { this._closeSongPicker(); return; }
     if (action === "editor-mode" && this._draft) {
       const group = button.dataset.modeGroup, mode = button.dataset.mode;
       this._changeEditorMode(group, mode);
@@ -754,10 +859,20 @@ class HouseholdAlarmsCard extends HTMLElement {
       this.shadowRoot.querySelector(`[data-mode-group="${group}"][data-mode="${mode}"]`)?.focus();
       return;
     }
-    if (action === "change-track") { this._choosingTrack = true; this._tracks = []; this._trackStatus = "Choose a replacement song. Your current selection stays until you pick another."; this._trackError = false; this._renderEditor(); this.shadowRoot.querySelector("[data-track-query]")?.focus(); return; }
+    if (action === "change-track") { this._openSongPicker(); return; }
     if (action === "choose-track") {
       const track = this._tracks[Number(button.dataset.trackIndex)];
-      if (track && this._draft) { this._draft.music_track = track.uri; this._draft.music_track_name = track.name; this._draft.music_server = this._trackServer; this._tracks = []; this._choosingTrack = false; this._trackStatus = "Song selected. Save the alarm to keep it."; this._trackError = false; this._renderEditor(); this.shadowRoot.querySelector('[data-action="change-track"]')?.focus(); }
+      if (track && this._draft) {
+        this._draft.music_track = track.uri;
+        this._draft.music_track_name = track.name;
+        this._draft.music_server = this._trackServer;
+        this._tracks = [];
+        this._trackStatus = "Song selected. Save the alarm to keep it.";
+        this._trackError = false;
+        this._closeSongPicker();
+        this._renderEditor();
+        this.shadowRoot.querySelector('[data-action="change-track"]')?.focus();
+      }
       return;
     }
     if (action.startsWith("music-")) { await this._musicOperation(action.slice(6)); return; }
