@@ -377,7 +377,7 @@ class HouseholdAlarmsCard extends HTMLElement {
     const repeats = [["weekdays", "Choose days"], ["once", "Just once"]];
     if (["school", "non_school"].includes(d.mode)) repeats.push([d.mode, "Keep current schedule"]);
     const calendarHelp = d.calendar_rule === "allow"
-      ? "The alarm will ring only on selected days when an event title includes one of these phrases. Add at least one phrase."
+      ? "The alarm will ring only on selected days when this calendar has an event. Add one or more phrases to match only event titles that include them; leave blank to match every event."
       : "Selected days with any event on this calendar will be skipped. Add one or more phrases to skip only days whose event titles match. Leave blank to skip every event.";
     const musicRampFields = d.music_ramp_enabled
        ? `<div class="grid">${this._field("music_ramp_step", "Increase by (percentage points)", "number", 'min="1" max="25" required')}${this._field("music_ramp_seconds", "Every (seconds)", "number", 'min="30" max="300" required')}${this._field("max_volume", "Maximum speaker volume (%)", "number", 'min="1" max="100" required')}</div><p class="mode-help" data-ramp-summary>Starts at ${esc(d.start_volume)}%, rises by ${esc(d.music_ramp_step)} percentage points every ${esc(d.music_ramp_seconds)} seconds, up to ${esc(d.max_volume)}%. It does not restart music or repeat the voice. Snooze starts again at the starting volume; changing volume yourself pauses increases for that ring. Requires the updated MA companion.</p>`
@@ -431,7 +431,7 @@ class HouseholdAlarmsCard extends HTMLElement {
       </div>${d.mode === "weekdays" ? `<div class="days" role="group" aria-label="Choose days">${DAYS.map((day, i) => `<label class="day-option${d.weekdays.includes(i) ? " selected" : ""}"><input type="checkbox" data-day="${i}" ${d.weekdays.includes(i) ? "checked" : ""}>${day}</label>`).join("")}</div>
       <div class="grid">${this._entity("calendar", "Calendar rules (optional)", "calendar")}</div>
       ${d.calendar ? `<div class="grid">${this._select("calendar_rule", "When an event matches", [["block", "Skip matching days"], ["allow", "Only ring on matching days"]], false)}</div>
-      <label>Event titles to match<textarea data-field="calendar_filters" maxlength="2000" ${d.calendar_rule === "allow" ? "required" : ""}>${esc(d.calendar_filters || "")}</textarea></label><p>Write one word or phrase per line. Matching ignores capital letters. ${calendarHelp}</p>` : ""}
+      <label>Event titles to match<textarea data-field="calendar_filters" maxlength="2000">${esc(d.calendar_filters || "")}</textarea></label><p>Write one word or phrase per line. Matching ignores capital letters. ${calendarHelp}</p>` : ""}
       <a href="https://my.home-assistant.io/redirect/config_flow_start/?domain=local_calendar" target="_blank" rel="noopener noreferrer">Add a calendar</a> · <a href="/calendar" target="_blank" rel="noopener noreferrer">Open your calendars</a>`
       : ["school", "non_school"].includes(d.mode) ? '<p>This alarm keeps its current repeat days. Choose another repeat option to change them.</p>' : ""}
       ${d.mode === "school" ? '<p>Set the latest wake-up time under Snooze and wake-up limits.</p>' : ""}</fieldset>

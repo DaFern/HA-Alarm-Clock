@@ -266,12 +266,13 @@ class RuleTests(unittest.TestCase):
         self.assertFalse(model.matches(allow, monday, False, False))
         self.assertFalse(model.matches(allow, tuesday, False, True))
 
-    def test_allow_calendar_rule_needs_a_calendar_and_phrase(self):
+    def test_allow_calendar_rule_needs_a_calendar_but_filter_is_optional(self):
         for fields in ({"calendar_rule": "allow"},
-                       {"calendar_rule": "allow", "calendar": "calendar.school"},
                        {"calendar_rule": "allow", "calendar_filters": "Holiday"}):
             with self.subTest(fields=fields), self.assertRaises(model.AlarmError):
                 model.validate(config(**fields))
+        alarm = model.validate(config(calendar_rule="allow", calendar="calendar.school"))
+        self.assertEqual(alarm["calendar_filters"], "")
         alarm = model.validate(config(calendar_rule="allow", calendar="calendar.school",
                                       calendar_filters="Holiday"))
         self.assertEqual(alarm["calendar_filters"], "Holiday")
@@ -1068,6 +1069,17 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.manager._deliver = AsyncMock()
         async def respond(domain, service, data):
             return {"calendar.school": {"events": [{"summary": "Inset Day"}]}}
+        self.hass.services.handler = respond
+        await self.manager._tick(self.now)
+        await self.settle()
+        self.manager._deliver.assert_awaited_once()
+
+    async def test_calendar_rule_allows_any_event_when_filter_is_blank(self):
+        await self.create(enabled=True, calendar="calendar.school", calendar_rule="allow")
+        self.hass.states.set("calendar.school", "on")
+        self.manager._deliver = AsyncMock()
+        async def respond(domain, service, data):
+            return {"calendar.school": {"events": [{"summary": "School photographs"}]}}
         self.hass.services.handler = respond
         await self.manager._tick(self.now)
         await self.settle()

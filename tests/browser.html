@@ -190,7 +190,7 @@
     test("calendar phrases are saved separately", card._draft.calendar_filters === 'School holiday\nInset day' && card._draft.schedule_include === '');
     await set('calendar_rule','allow');
     test("calendar allow choice is clearly labelled", [...q('[data-field="calendar_rule"]').options].some((option) => option.textContent === 'Only ring on matching days'));
-    test("calendar allow choice asks for a phrase", q('[data-field="calendar_filters"]').required);
+    test("calendar allow choice makes title filter optional and explains blank matching", !q('[data-field="calendar_filters"]').required && q('#editor').textContent.includes('leave blank to match every event'));
     await set('calendar_rule','block');
     q('[data-section="sleep-switch"] summary').click(); await flush();
     test('sleep dismissal option is hidden without a switch', !q('[data-field="clear_sleep_on_dismiss"]'));

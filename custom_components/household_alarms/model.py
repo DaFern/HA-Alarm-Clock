@@ -141,8 +141,8 @@ def validate(
         raise AlarmError("Sleeping in is not available for school-day alarms")
     if result["mode"] == "school" and not result["deadline"]:
         raise AlarmError("School-day alarms need a get-up deadline")
-    if result["calendar_rule"] == "allow" and (not result["calendar"] or not result["calendar_filters"].strip()):
-        raise AlarmError("Choose a calendar and add at least one event title for days to allow")
+    if result["calendar_rule"] == "allow" and not result["calendar"]:
+        raise AlarmError("Choose a calendar for days to allow")
     for key, domain in {
         "speaker": "media_player", "calendar": "calendar", "weather": "weather",
         "notify_service": "notify",
