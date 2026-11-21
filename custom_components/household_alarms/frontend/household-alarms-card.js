@@ -24,10 +24,15 @@ class HouseholdAlarmsCard extends HTMLElement {
     this._trackError = false;
     this._trackSearching = false;
     this._choosingTrack = false;
+    this._entitySearchHistoryEntry = false;
+    this._entitySearchCleanup = false;
+    this._focusedEntitySelector = null;
     this.shadowRoot.addEventListener("click", (event) => this._click(event));
     this.shadowRoot.addEventListener("input", (event) => this._input(event));
     this.shadowRoot.addEventListener("change", (event) => this._change(event));
     this.shadowRoot.addEventListener("value-changed", (event) => this._entityChanged(event));
+    this.shadowRoot.addEventListener("focusin", (event) => this._entitySearchFocused(event));
+    this.shadowRoot.addEventListener("focusout", (event) => this._entitySearchBlurred(event));
     this.shadowRoot.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && event.target.hasAttribute("data-track-query")) {
         event.preventDefault();
@@ -56,6 +61,7 @@ class HouseholdAlarmsCard extends HTMLElement {
   }
 
   connectedCallback() {
+    window.addEventListener("popstate", this._handleEntitySearchBack);
     this._render();
     if (this._hass) this._connect();
     // Re-evaluate local calendar dates even if HA sends no alarm state change.
@@ -69,6 +75,7 @@ class HouseholdAlarmsCard extends HTMLElement {
   }
 
   disconnectedCallback() {
+    window.removeEventListener("popstate", this._handleEntitySearchBack);
     clearInterval(this._dateTimer);
     this._closePreview();
     this._generation++;
@@ -76,6 +83,37 @@ class HouseholdAlarmsCard extends HTMLElement {
     this._unsubscribe = null;
     this._connection = null;
   }
+
+  _entitySearchFocused(event) {
+    const selector = event.composedPath().find((element) => element?.matches?.("ha-selector[data-entity-selector]"));
+    if (!selector) return;
+    this._focusedEntitySelector = selector;
+    if (this._entitySearchHistoryEntry) return;
+    const state = history.state && typeof history.state === "object" ? history.state : {};
+    history.pushState({ ...state, householdAlarmEntitySearch: true }, "");
+    this._entitySearchHistoryEntry = true;
+  }
+
+  _entitySearchBlurred(event) {
+    const selector = event.composedPath().find((element) => element?.matches?.("ha-selector[data-entity-selector]"));
+    if (!selector || selector !== this._focusedEntitySelector || !this._entitySearchHistoryEntry) return;
+    this._focusedEntitySelector = null;
+    this._entitySearchCleanup = true;
+    history.back();
+  }
+
+  _handleEntitySearchBack = () => {
+    if (!this._entitySearchHistoryEntry) return;
+    this._entitySearchHistoryEntry = false;
+    if (this._entitySearchCleanup) {
+      this._entitySearchCleanup = false;
+      return;
+    }
+    const selector = this._focusedEntitySelector;
+    this._focusedEntitySelector = null;
+    const active = selector?.shadowRoot?.activeElement;
+    (active && active !== selector ? active : selector)?.blur?.();
+  };
 
   async _connect() {
     const connection = this._hass.connection;

@@ -126,6 +126,18 @@
       const domain={speaker:'media_player',calendar:'calendar',bedtime_entity:'input_boolean'}[field];
       return selector.localName==='ha-selector' && selector.selector.entity.filter.domain===domain && selector.hass===hass;
     }) && q('[data-field="speaker"]').required && !q('[data-field="calendar"]').required);
+    {
+      const selector=q('[data-field="speaker"]');
+      const pushState=history.pushState, back=history.back, blur=selector.blur;
+      let pushed=false, blurred=false;
+      history.pushState=()=>{pushed=true;};
+      history.back=()=>{};
+      selector.blur=()=>{blurred=true;};
+      card._entitySearchFocused({composedPath:()=>[selector]});
+      card._handleEntitySearchBack();
+      test('phone Back closes an open entity search before navigating', pushed && blurred && !card._entitySearchHistoryEntry);
+      history.pushState=pushState; history.back=back; selector.blur=blur;
+    }
     test("duplicate enable checkbox was removed", !q('[data-field="enabled"]'));
     test("generic form has no preset family or assistant", !q('#people option') && !card._draft.assistant_id && !card._draft.weather);
     test('message repeat is hidden when morning message is off', !q('[data-field="repeat_message_after_snooze"]'));
