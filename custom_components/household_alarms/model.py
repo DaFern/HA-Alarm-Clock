@@ -16,6 +16,7 @@ DEFAULTS = {
     "name": "New alarm", "person": "", "enabled": False,
     "time": "07:00", "mode": "weekdays", "weekdays": [0, 1, 2, 3, 4],
     "date": "", "calendar": "", "calendar_rule": "block", "calendar_filters": "",
+    "calendar_days_custom": False, "calendar_match_days": [],
     "speaker": "", "tone": "chime",
     "music_enabled": False, "music_track": "", "music_track_name": "", "music_server": "",
     "music_gain": 25, "speech_delay": 0,
@@ -85,7 +86,7 @@ def validate(
         result[key] = "\n".join(phrases)
     if not result["name"]:
         raise AlarmError("Give the alarm a name")
-    for key in ("enabled", "snooze_enabled", "repeat_message_after_snooze", "allow_sleep_in", "notify_enabled", "briefing_enabled", "schedule_enabled", "clear_sleep_on_dismiss", "music_enabled", "music_ramp_enabled", "phone_enabled", "phone_wake_screen"):
+    for key in ("enabled", "snooze_enabled", "repeat_message_after_snooze", "allow_sleep_in", "notify_enabled", "briefing_enabled", "schedule_enabled", "clear_sleep_on_dismiss", "music_enabled", "music_ramp_enabled", "phone_enabled", "phone_wake_screen", "calendar_days_custom"):
         if type(result[key]) is not bool:
             raise AlarmError(f"Invalid {key}")
     if require_spoken_assistant and (result["briefing_enabled"] or result["tone"] == "none") and not result["assistant_id"]:
@@ -126,6 +127,12 @@ def validate(
     result["weekdays"] = sorted(set(days))
     if result["mode"] == "weekdays" and not days:
         raise AlarmError("Select at least one repeat day")
+    match_days = result["calendar_match_days"]
+    if not isinstance(match_days, list) or any(type(day) is not int or not 0 <= day <= 6 for day in match_days):
+        raise AlarmError("Invalid calendar match days")
+    result["calendar_match_days"] = sorted(set(match_days))
+    if not set(result["calendar_match_days"]).issubset(result["weekdays"]):
+        raise AlarmError("Calendar match days must also be selected repeat days")
     clock(result["time"])
     if result["deadline"]:
         if clock(result["deadline"]) <= clock(result["time"]):
@@ -208,7 +215,9 @@ def matches(alarm: dict, day: date, school: bool, calendar_match: bool | None = 
             if alarm.get("calendar_rule", "none") == "block" and calendar_match is True:
                 return False
             if alarm.get("calendar_rule", "none") == "allow" and calendar_match is False:
-                return False
+                calendar_days = alarm.get("weekdays", [])
+                if not alarm.get("calendar_days_custom", False) or day.weekday() in alarm.get("calendar_match_days", calendar_days):
+                    return False
             return True
 
 

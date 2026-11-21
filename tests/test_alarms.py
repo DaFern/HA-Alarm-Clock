@@ -266,6 +266,27 @@ class RuleTests(unittest.TestCase):
         self.assertFalse(model.matches(allow, monday, False, False))
         self.assertFalse(model.matches(allow, tuesday, False, True))
 
+    def test_calendar_match_days_can_gate_only_a_subset_of_repeat_days(self):
+        monday = date(2026, 11, 9)
+        saturday = date(2026, 11, 14)
+        sunday = date(2026, 11, 15)
+        alarm = model.validate(config(
+            calendar="calendar.school", calendar_rule="allow",
+            weekdays=[0, 1, 2, 3, 4, 5, 6], calendar_days_custom=True,
+            calendar_match_days=[0, 1, 2, 3, 4],
+        ))
+        self.assertFalse(model.matches(alarm, monday, False, False))
+        self.assertTrue(model.matches(alarm, monday, False, True))
+        self.assertTrue(model.matches(alarm, saturday, False, False))
+        self.assertTrue(model.matches(alarm, sunday, False, False))
+
+    def test_calendar_match_days_must_be_selected_repeat_days(self):
+        with self.assertRaises(model.AlarmError):
+            model.validate(config(
+                calendar="calendar.school", calendar_rule="allow",
+                weekdays=[0, 1], calendar_days_custom=True, calendar_match_days=[2],
+            ))
+
     def test_allow_calendar_rule_needs_a_calendar_but_filter_is_optional(self):
         for fields in ({"calendar_rule": "allow"},
                        {"calendar_rule": "allow", "calendar_filters": "Holiday"}):

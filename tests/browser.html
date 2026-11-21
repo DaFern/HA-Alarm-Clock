@@ -30,7 +30,7 @@
   let confirmation = true, subscriber, nextId = 1;
   window.confirm = (text) => { confirms.push(text); return confirmation; };
   window.attacked = false;
-  const defaults = { name: "New alarm", person: "", enabled: false, time: "07:00", mode: "weekdays", weekdays: [0,1,2,3,4], date: "", calendar: "", calendar_rule:'block',calendar_filters:'', speaker: "", tone: "chime", start_volume:20, max_volume:60, volume_step:10, repeat_seconds:60, snooze_enabled:true, snooze_minutes:5, max_snoozes:3, deadline:"", allow_sleep_in:false, notify_enabled:false, notify_service:"", bedtime_entity:"", briefing_enabled:false, assistant_id:"", instructions:"Be brief and use supplied facts.", weather:"" };
+  const defaults = { name: "New alarm", person: "", enabled: false, time: "07:00", mode: "weekdays", weekdays: [0,1,2,3,4], date: "", calendar: "", calendar_rule:'block',calendar_filters:'',calendar_days_custom:false,calendar_match_days:[], speaker: "", tone: "chime", start_volume:20, max_volume:60, volume_step:10, repeat_seconds:60, snooze_enabled:true, snooze_minutes:5, max_snoozes:3, deadline:"", allow_sleep_in:false, notify_enabled:false, notify_service:"", bedtime_entity:"", briefing_enabled:false, assistant_id:"", instructions:"Be brief and use supplied facts.", weather:"" };
   defaults.schedule_enabled=false; defaults.schedule_calendars=[];
   defaults.briefing_words=100; defaults.schedule_include=''; defaults.schedule_exclude='';
   defaults.clear_sleep_on_dismiss=false;
@@ -211,6 +211,14 @@
     await set('calendar_rule','allow');
     test("calendar allow choice is clearly labelled", [...q('[data-field="calendar_rule"]').options].some((option) => option.textContent === 'Only ring on matching days'));
     test("calendar allow choice makes title filter optional and explains blank matching", !q('[data-field="calendar_filters"]').required && q('#editor').textContent.includes('leave blank to match every event'));
+    test("calendar day controls stay hidden until their checkbox is ticked", !q('[data-field="calendar_days_custom"]').checked && !q('[data-calendar-match-day]'));
+    await set('calendar_days_custom',true);
+    test("calendar day controls appear checked for all selected repeat days", q('[data-field="calendar_days_custom"]').checked && q('[data-calendar-match-day="0"]').checked && !q('[data-calendar-match-day="5"]').checked);
+    q('[data-day="5"]').click(); q('[data-day="6"]').click(); await flush();
+    test("new repeat days default to requiring a calendar match", q('[data-calendar-match-day="5"]').checked && q('[data-calendar-match-day="6"]').checked);
+    q('[data-calendar-match-day="5"]').click(); q('[data-calendar-match-day="6"]').click(); await flush();
+    test("unchecking calendar days makes selected repeat days unconditional", JSON.stringify(card._draft.weekdays)==='[0,1,2,3,4,5,6]' && JSON.stringify(card._draft.calendar_match_days)==='[0,1,2,3,4]');
+    q('[data-day="5"]').click(); q('[data-day="6"]').click(); await flush();
     await set('calendar_rule','block');
     q('[data-section="sleep-switch"] summary').click(); await flush();
     test('sleep dismissal option is hidden without a switch', !q('[data-field="clear_sleep_on_dismiss"]'));

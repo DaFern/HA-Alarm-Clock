@@ -424,8 +424,11 @@ class HouseholdAlarmsCard extends HTMLElement {
     const repeats = [["weekdays", "Choose days"], ["once", "Just once"]];
     if (["school", "non_school"].includes(d.mode)) repeats.push([d.mode, "Keep current schedule"]);
     const calendarHelp = d.calendar_rule === "allow"
-      ? "The alarm will ring only on selected days when this calendar has an event. Add one or more phrases to match only event titles that include them; leave blank to match every event."
+      ? "By default, the alarm rings only on selected days when this calendar has an event. If you choose specific calendar-match days, only those selected days need an event; other selected days ring regardless. Add phrases to match only event titles that include them; leave blank to match every event."
       : "Selected days with any event on this calendar will be skipped. Add one or more phrases to skip only days whose event titles match. Leave blank to skip every event.";
+    const calendarMatchDays = d.calendar_days_custom
+      ? `<div class="days" role="group" aria-label="Days that require a calendar match">${DAYS.map((day, i) => `<label class="day-option${(d.calendar_match_days || []).includes(i) ? " selected" : ""}"><input type="checkbox" data-calendar-match-day="${i}" ${(d.calendar_match_days || []).includes(i) ? "checked" : ""} ${!d.weekdays.includes(i) ? "disabled" : ""}>${day}</label>`).join("")}</div><p>Checked days need a matching event. Other selected repeat days ring without one.</p>`
+      : "";
     const musicRampFields = d.music_ramp_enabled
        ? `<div class="grid">${this._field("music_ramp_step", "Increase by (percentage points)", "number", 'min="1" max="25" required')}${this._field("music_ramp_seconds", "Every (seconds)", "number", 'min="30" max="300" required')}${this._field("max_volume", "Maximum speaker volume (%)", "number", 'min="1" max="100" required')}</div><p class="mode-help" data-ramp-summary>Starts at ${esc(d.start_volume)}%, rises by ${esc(d.music_ramp_step)} percentage points every ${esc(d.music_ramp_seconds)} seconds, up to ${esc(d.max_volume)}%. It does not restart music or repeat the voice. Snooze starts again at the starting volume; changing volume yourself pauses increases for that ring. Requires the updated MA companion.</p>`
       : `<div class="grid">${this._field("max_volume", "Maximum speaker volume (%)", "number", 'min="1" max="100" required')}${this._field("volume_step", "Increase per resumed ring (percentage points)", "number", 'min="0" max="25" required')}</div><p class="mode-help">No timed increases. Existing resume-volume behaviour is unchanged.</p>`;
@@ -478,6 +481,8 @@ class HouseholdAlarmsCard extends HTMLElement {
       </div>${d.mode === "weekdays" ? `<div class="days" role="group" aria-label="Choose days">${DAYS.map((day, i) => `<label class="day-option${d.weekdays.includes(i) ? " selected" : ""}"><input type="checkbox" data-day="${i}" ${d.weekdays.includes(i) ? "checked" : ""}>${day}</label>`).join("")}</div>
       <div class="grid">${this._entity("calendar", "Calendar rules (optional)", "calendar")}</div>
       ${d.calendar ? `<div class="grid">${this._select("calendar_rule", "When an event matches", [["block", "Skip matching days"], ["allow", "Only ring on matching days"]], false)}</div>
+      ${d.calendar_rule === "allow" ? this._check("calendar_days_custom", "Choose which repeat days require a calendar match") : ""}
+      ${d.calendar_rule === "allow" && d.calendar_days_custom ? calendarMatchDays : ""}
       <label>Event titles to match<textarea data-field="calendar_filters" maxlength="2000">${esc(d.calendar_filters || "")}</textarea></label><p>Write one word or phrase per line. Matching ignores capital letters. ${calendarHelp}</p>` : ""}
       <a href="https://my.home-assistant.io/redirect/config_flow_start/?domain=local_calendar" target="_blank" rel="noopener noreferrer">Add a calendar</a> · <a href="/calendar" target="_blank" rel="noopener noreferrer">Open your calendars</a>`
       : ["school", "non_school"].includes(d.mode) ? '<p>This alarm keeps its current repeat days. Choose another repeat option to change them.</p>' : ""}
@@ -585,12 +590,34 @@ class HouseholdAlarmsCard extends HTMLElement {
     if (input.dataset.day !== undefined) {
       const day = Number(input.dataset.day);
       this._draft.weekdays = input.checked ? [...new Set([...this._draft.weekdays, day])].sort() : this._draft.weekdays.filter((d) => d !== day);
+      if (this._draft.calendar_days_custom) {
+        const matchDays = this._draft.calendar_match_days || [];
+        this._draft.calendar_match_days = input.checked
+          ? [...new Set([...matchDays, day])].sort()
+          : matchDays.filter((d) => d !== day);
+        const matchInput = this.shadowRoot.querySelector(`[data-calendar-match-day="${day}"]`);
+        if (matchInput) {
+          matchInput.disabled = !input.checked;
+          matchInput.checked = this._draft.calendar_match_days.includes(day);
+          matchInput.closest(".day-option")?.classList.toggle("selected", matchInput.checked);
+        }
+      }
+      input.closest(".day-option")?.classList.toggle("selected", input.checked);
+      return;
+    }
+    if (input.dataset.calendarMatchDay !== undefined) {
+      const day = Number(input.dataset.calendarMatchDay);
+      const matchDays = this._draft.calendar_match_days || [];
+      this._draft.calendar_match_days = input.checked
+        ? [...new Set([...matchDays, day])].sort()
+        : matchDays.filter((d) => d !== day);
       input.closest(".day-option")?.classList.toggle("selected", input.checked);
       return;
     }
     const field = input.dataset.field;
     if (!field) return;
     this._draft[field] = input.type === "checkbox" ? input.checked : input.type === "number" || field === "briefing_words" ? Number(input.value) : input.value;
+    if (field === "calendar_days_custom" && input.checked) this._draft.calendar_match_days = [...this._draft.weekdays];
     if (field === "tone" && input.value !== "none" && this._editorModeMemory) this._editorModeMemory.tone = input.value;
     if (field === "assistant_id" && this._editorModeMemory) this._editorModeMemory.assistantId = input.value;
     this._updateSectionSummaries();
@@ -605,7 +632,7 @@ class HouseholdAlarmsCard extends HTMLElement {
     }
     if (field === "calendar" && !this._draft.calendar && this._draft.calendar_rule === "allow") this._draft.calendar_rule = "block";
     if (field === "bedtime_entity" && !this._draft.bedtime_entity) this._draft.clear_sleep_on_dismiss = false;
-    if (field === "calendar" || field === "calendar_rule" || field === "notify_service" || field === "schedule_enabled" || field === "bedtime_entity") this._renderEditor();
+    if (field === "calendar" || field === "calendar_rule" || field === "calendar_days_custom" || field === "notify_service" || field === "schedule_enabled" || field === "bedtime_entity") this._renderEditor();
   }
 
   _configuration(alarm) {
