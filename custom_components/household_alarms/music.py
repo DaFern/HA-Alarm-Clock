@@ -92,22 +92,66 @@ class MusicVolumeRamp:
 
 
 async def search_tracks(hass, speaker, query, *, resolver=resolve_client, server_resolver=resolve_server_id):
-    """Read only the selected speaker's library; return bounded public metadata."""
+    """Search the selected speaker's library; tolerate terms in any order."""
     if not isinstance(query, str) or not 1 <= len(query.strip()) <= 100:
         raise AlarmError("Enter between one and 100 characters to search for a song")
     client, queue_id = resolver(hass, speaker)
     server_id = server_resolver(hass, speaker)
     await capabilities(client, queue_id)
-    rows = await command(client, "music/tracks/library_items", search=query.strip(), limit=20, offset=0, timeout=15)
-    if isinstance(rows, dict):
-        rows = rows.get("items", [])
-    if not isinstance(rows, list):
-        raise AlarmError("Music Assistant returned an invalid song list")
+    query = query.strip()
+    terms = list(dict.fromkeys(re.findall(r"[^\W_]+", query.casefold())))[:6]
+
+    async def search_rows(search):
+        rows = await command(
+            client, "music/tracks/library_items",
+            search=search, limit=20, offset=0, timeout=15,
+        )
+        if isinstance(rows, dict):
+            rows = rows.get("items", [])
+        if not isinstance(rows, list):
+            raise AlarmError("Music Assistant returned an invalid song list")
+        return rows[:20]
+
+    rows = await search_rows(query)
+
+    def row_terms(row):
+        artists = row.get("artists", [])
+        artist_names = [
+            str(item.get("name", "")) for item in artists[:3]
+            if isinstance(item, dict)
+        ] if isinstance(artists, list) else []
+        return set(re.findall(
+            r"[^\W_]+", " ".join([str(row.get("name", "")), *artist_names]).casefold()
+        ))
+
+    # Some MA search providers treat a multi-word query like an exact phrase.
+    # Only fan out when the phrase search did not return an all-term match.
+    if terms and not any(all(term in row_terms(row) for term in terms) for row in rows if isinstance(row, dict)):
+        token_rows = await asyncio.gather(*(search_rows(term) for term in terms))
+        rows = [*rows, *(row for group in token_rows for row in group)]
+
+    unique_rows = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        uri = str(row.get("uri", ""))
+        if re.fullmatch(r"library://track/[0-9]{1,20}", uri):
+            unique_rows.setdefault(uri, row)
+
+    rows = sorted(
+        unique_rows.values(),
+        key=lambda row: (
+            -sum(term in row_terms(row) for term in terms),
+            str(row.get("name", "")).casefold(),
+        ),
+    )
     result = []
     for row in rows[:20]:
-        if not isinstance(row, dict) or not re.fullmatch(r"library://track/[0-9]{1,20}", str(row.get("uri", ""))):
-            continue
-        artists = ", ".join(str(item.get("name", ""))[:100] for item in row.get("artists", [])[:3] if isinstance(item, dict))
+        artists_data = row.get("artists", [])
+        artists = ", ".join(
+            str(item.get("name", ""))[:100] for item in artists_data[:3]
+            if isinstance(item, dict)
+        ) if isinstance(artists_data, list) else ""
         name = str(row.get("name", "Song"))[:200]
         result.append({"uri": row["uri"], "name": (name + (" — " + artists if artists else ""))[:300]})
     if server_resolver(hass, speaker) != server_id:

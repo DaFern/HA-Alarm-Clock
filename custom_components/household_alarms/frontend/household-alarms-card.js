@@ -28,6 +28,11 @@ class HouseholdAlarmsCard extends HTMLElement {
     this._songPickerDialog = null;
     this._songPickerHistoryEntry = false;
     this._songPickerHistoryCleanup = false;
+    this._servicePickerDialog = null;
+    this._servicePickerField = "";
+    this._servicePickerItems = [];
+    this._servicePickerHistoryEntry = false;
+    this._servicePickerHistoryCleanup = false;
     this._entityPickerHistoryEntry = false;
     this._entityPickerHistoryCleanup = false;
     this._activeEntityPicker = null;
@@ -85,6 +90,7 @@ class HouseholdAlarmsCard extends HTMLElement {
     clearInterval(this._dateTimer);
     this._closePreview();
     this._closeSongPicker();
+    this._closeServicePicker();
     this._generation++;
     this._unsubscribe?.();
     this._unsubscribe = null;
@@ -125,6 +131,15 @@ class HouseholdAlarmsCard extends HTMLElement {
         return;
       }
       this._closeSongPicker();
+      return;
+    }
+    if (this._servicePickerHistoryEntry) {
+      this._servicePickerHistoryEntry = false;
+      if (this._servicePickerHistoryCleanup) {
+        this._servicePickerHistoryCleanup = false;
+        return;
+      }
+      this._closeServicePicker();
       return;
     }
     if (!this._entityPickerHistoryEntry) return;
@@ -178,6 +193,14 @@ class HouseholdAlarmsCard extends HTMLElement {
 
   _entity(field, label, domain, optional = true) {
     return `<ha-selector data-field="${esc(field)}" data-entity-selector data-entity-domain="${esc(domain)}" label="${esc(label)}"></ha-selector>`;
+  }
+
+  _servicePicker(field, label) {
+    const value = this._draft[field] || "";
+    const title = value
+      ? this._serviceName(value)
+      : field === "notify_service" ? "Home Assistant only" : "Choose a phone";
+    return `<div class="service-picker-field"><span>${esc(label)}</span><button type="button" data-field="${esc(field)}" data-action="open-service-picker" data-service-field="${esc(field)}" aria-haspopup="dialog">${esc(title)}</button></div>`;
   }
 
   _configureEntitySelectors() {
@@ -333,7 +356,7 @@ class HouseholdAlarmsCard extends HTMLElement {
     this._closePreview();
     this.shadowRoot.innerHTML = `<style>
       .selected-track{border:2px solid var(--primary-color);border-radius:12px;padding:12px;margin:12px 0;background:var(--secondary-background-color);overflow-wrap:anywhere}.selected-track strong{display:block;margin-bottom:8px}#track-feedback{white-space:pre-wrap;overflow-wrap:anywhere}
-      .song-picker-dialog{box-sizing:border-box;width:min(560px,calc(100vw - 24px));max-height:85dvh;overflow:hidden;border:1px solid var(--divider-color);border-radius:16px;padding:0;background:var(--card-background-color,#191919);color:var(--primary-text-color)}.song-picker-dialog::backdrop{background:#0009}.song-picker-header{position:sticky;top:0;z-index:1;padding:18px 20px 8px;background:var(--card-background-color,#191919)}.song-picker-content{padding:0 20px 20px;overflow:auto;max-height:calc(85dvh - 76px)}.song-picker-content label{display:block;margin:8px 0}.song-picker-content input{box-sizing:border-box;width:100%;padding:10px 12px;border:1px solid var(--divider-color);border-radius:10px;background:var(--secondary-background-color);color:var(--primary-text-color)}.track-results{display:grid;gap:8px;margin-top:12px}.track-option{width:100%;text-align:left;overflow-wrap:anywhere}.song-picker-dialog .notice{margin:10px 0}.song-picker-dialog .notice:empty{display:none}
+      .song-picker-dialog,.service-picker-dialog{box-sizing:border-box;width:min(560px,calc(100vw - 24px));max-height:85dvh;overflow:hidden;border:1px solid var(--divider-color);border-radius:16px;padding:0;background:var(--card-background-color,#191919);color:var(--primary-text-color)}.song-picker-dialog::backdrop,.service-picker-dialog::backdrop{background:#0009}.song-picker-header{position:sticky;top:0;z-index:1;padding:18px 20px 8px;background:var(--card-background-color,#191919)}.song-picker-content,.service-picker-content{padding:0 20px 20px;overflow:auto;max-height:calc(85dvh - 76px)}.song-picker-content label,.service-picker-content label{display:block;margin:8px 0}.song-picker-content input,.service-picker-content input{box-sizing:border-box;width:100%;padding:10px 12px;border:1px solid var(--divider-color);border-radius:10px;background:var(--secondary-background-color);color:var(--primary-text-color)}.track-results,.service-results{display:grid;gap:8px;margin-top:12px}.track-option,.service-option{width:100%;text-align:left;overflow-wrap:anywhere}.service-option span,.service-option small{display:block}.service-option small{font-size:12px;color:var(--secondary-text-color);margin-top:4px}.song-picker-dialog .notice,.service-picker-dialog .notice{margin:10px 0}.song-picker-dialog .notice:empty,.service-picker-dialog .notice:empty{display:none}.service-picker-field{display:grid;gap:6px;margin:10px 0}.service-picker-field>span{font-size:13px}.service-picker-field>button{text-align:left}
       :host{display:block;color:var(--primary-text-color);font-family:var(--paper-font-body1_-_font-family,system-ui)}
       ha-card{display:block;padding:18px;border-radius:var(--ha-card-border-radius,16px);background:var(--ha-card-background,var(--card-background-color));border:1px solid var(--divider-color)}
       header,.row,.actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}header{justify-content:space-between}h2{font-size:21px;margin:0}h3{font-size:17px;margin:0 0 8px}
@@ -342,7 +365,7 @@ class HouseholdAlarmsCard extends HTMLElement {
       :host{font-size:16px}label,.actions button{font-size:16px}input,select,textarea{font-size:16px;min-height:48px}input[type=checkbox]{min-height:24px;width:24px}.check{min-height:44px}.power{display:inline-flex;align-items:center;gap:10px;min-width:104px;border:none}.track{display:inline-flex;align-items:center;width:46px;height:28px;border-radius:18px;background:var(--disabled-color,#777);padding:3px;box-sizing:border-box}.track span{display:block;width:22px;height:22px;border-radius:50%;background:#fff}.is-on .track{background:var(--primary-color)}.is-on .track span{transform:translateX(18px)}details{margin:18px 0;border-top:1px solid var(--divider-color);padding-top:14px}summary{font-weight:600;cursor:pointer;min-height:44px;line-height:44px}.settings-panel summary{height:auto;line-height:1.3;padding:5px 0;box-sizing:border-box}.settings-summary{display:block;margin-top:4px;color:var(--secondary-text-color);font-size:13px;font-weight:400;line-height:1.4}.editor-header{justify-content:space-between}.section-help{margin-bottom:0}a{color:var(--primary-color);display:inline-block;min-height:32px;line-height:32px}.notification-help{font-size:15px;line-height:1.6;padding-left:22px}
       .alarm-actions{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:stretch}.alarm-actions button{width:100%;box-sizing:border-box;white-space:nowrap}.alarm-actions [data-action=delete]{grid-column:1/-1}
        dialog{box-sizing:border-box;width:min(560px,calc(100vw - 24px));max-height:85vh;overflow:auto;border:1px solid var(--divider-color);border-radius:16px;padding:20px;background:var(--card-background-color,#191919);color:var(--primary-text-color)}dialog::backdrop{background:#0009}dialog audio{width:100%;margin:12px 0}dialog .preview-text{white-space:pre-wrap;overflow-wrap:anywhere}
-       @media(max-width:520px){.grid{grid-template-columns:1fr}.full{grid-column:auto}ha-card{padding:14px}.alarm-heading{gap:8px}.time{font-size:25px}.name{font-size:16px}.active-actions button{flex:1}.song-picker-dialog{margin:auto 0 0;width:100vw;max-width:none;max-height:90dvh;border-radius:20px 20px 0 0}.song-picker-content{max-height:calc(90dvh - 76px)}}
+       @media(max-width:520px){.grid{grid-template-columns:1fr}.full{grid-column:auto}ha-card{padding:14px}.alarm-heading{gap:8px}.time{font-size:25px}.name{font-size:16px}.active-actions button{flex:1}.song-picker-dialog,.service-picker-dialog{margin:auto 0 0;width:100vw;max-width:none;max-height:90dvh;border-radius:20px 20px 0 0}.song-picker-content,.service-picker-content{max-height:calc(90dvh - 76px)}}
       .next-occurrence{display:inline-block;max-width:100%;white-space:nowrap;font-weight:400;font-size:clamp(11px,3cqi,14px)}
       ha-card{container-type:inline-size}
       @container (max-width:520px){.grid{grid-template-columns:1fr}.full{grid-column:auto}.alarm-row{grid-template-columns:minmax(0,1fr) auto;gap:8px}.alarm-tools{grid-template-columns:repeat(2,44px);grid-template-rows:repeat(2,44px)}}
@@ -512,10 +535,10 @@ class HouseholdAlarmsCard extends HTMLElement {
         ${d.mode !== "school" ? this._check("allow_sleep_in", "Allow sleeping in") : '<p>This saved alarm does not allow sleeping in.</p>'}
       </details>
       <details class="settings-panel" data-section="phone-controls" ${section("phone-controls")}><summary>Phone controls<span class="settings-summary" data-summary="phone-controls">${esc(phoneSummary)}</span></summary>${this._check("phone_enabled", "Show Dismiss and Snooze when this alarm rings")}
-        ${d.phone_enabled ? `${this._select("phone_service", "Send alarm controls to", (this._data.phone_targets || []).map((item) => [item.service, item.service.replace(/^notify\.mobile_app_/, "").replace(/_/g, " ") + " — " + item.service]), false)}${this._check("phone_wake_screen", "Wake the phone screen (Android only)")}<p>Anyone holding the phone can use its lock-screen buttons. Snooze uses this alarm's limits and deadline. Your phone must allow Companion notifications and lock-screen content; screen wake needs an identified Android phone and enabled notification commands.</p>` : ""}
+        ${d.phone_enabled ? `${this._servicePicker("phone_service", "Send alarm controls to")}${this._check("phone_wake_screen", "Wake the phone screen (Android only)")}<p>Anyone holding the phone can use its lock-screen buttons. Snooze uses this alarm's limits and deadline. Your phone must allow Companion notifications and lock-screen content; screen wake needs an identified Android phone and enabled notification commands.</p>` : ""}
       </details>
       <details class="settings-panel" data-section="help-alerts" ${section("help-alerts")}><summary>Help alerts<span class="settings-summary" data-summary="help-alerts">${esc(alertSummary)}</span></summary>${this._check("notify_enabled", "Send a message if help is needed")}
-        ${d.notify_enabled ? `<p>Let someone know when:</p><ul class="notification-help"><li>The alarm has not been stopped by the latest wake-up time.</li><li>You choose to sleep in.</li><li>The speaker cannot play the alarm.</li></ul>${this._select("notify_service", "Send to", this._data.notify_services.map((id) => [id, id.replace(/^notify\.(mobile_app_)?/, "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())]), true, "Home Assistant only")}<p>${d.notify_service ? "Messages will go to the person or group you choose." : "Choose a phone or group above to send a phone message. Otherwise, the message only appears in Home Assistant."}</p>` : ""}
+        ${d.notify_enabled ? `<p>Let someone know when:</p><ul class="notification-help"><li>The alarm has not been stopped by the latest wake-up time.</li><li>You choose to sleep in.</li><li>The speaker cannot play the alarm.</li></ul>${this._servicePicker("notify_service", "Send to")}<p>${d.notify_service ? "Messages will go to the person or group you choose." : "Choose a phone or group above to send a phone message. Otherwise, the message only appears in Home Assistant."}</p>` : ""}
       </details>
       <details class="settings-panel" data-section="sleep-switch" ${section("sleep-switch")}><summary>Sleep switch<span class="settings-summary" data-summary="sleep-switch">${esc(sleepSummary)}</span></summary>${this._entity("bedtime_entity", "Existing sleep switch (optional)", "input_boolean")}
         ${d.bedtime_entity ? this._check("clear_sleep_on_dismiss", "Turn off on dismissal") + '<p>Snooze and Sleep in leave the switch alone.</p>' : ""}
@@ -590,6 +613,79 @@ class HouseholdAlarmsCard extends HTMLElement {
     this._songPickerDialog?.close();
   }
 
+  _servicePickerOptions(field) {
+    let items = field === "phone_service"
+      ? (this._data.phone_targets || []).map((target) => target.service)
+      : (this._data.notify_services || []);
+    items = [...new Set(items.filter((service) => typeof service === "string" && service.startsWith("notify.")))];
+    if (field === "notify_service") items.unshift("");
+    const selected = this._draft?.[field] || "";
+    if (selected && !items.includes(selected)) items.unshift(selected);
+    return items.map((service) => ({
+      service,
+      label: service ? this._serviceName(service) : "Home Assistant only",
+      detail: service || "Show alerts only in Home Assistant",
+      unavailable: !!service && !(field === "phone_service"
+        ? (this._data.phone_targets || []).some((target) => target.service === service)
+        : (this._data.notify_services || []).includes(service)),
+    }));
+  }
+
+  _openServicePicker(field) {
+    if (!["phone_service", "notify_service"].includes(field) || !this._draft || this._servicePickerDialog) return;
+    this._servicePickerField = field;
+    this._servicePickerItems = this._servicePickerOptions(field);
+    const title = field === "phone_service" ? "Choose a phone" : "Choose a notification destination";
+    const dialog = document.createElement("dialog");
+    dialog.className = "service-picker-dialog";
+    dialog.setAttribute("aria-labelledby", "service-picker-title");
+    dialog.innerHTML = `<header class="song-picker-header"><div><h3 id="service-picker-title">${title}</h3><button type="button" data-action="close-service-picker" aria-label="Close destination search">Close</button></div></header>
+      <div class="service-picker-content"><p>Search available Home Assistant notification destinations.</p><label>Search destinations<input data-service-query maxlength="100" placeholder="Name or service" autocomplete="off" aria-describedby="service-picker-status"></label>
+      <div id="service-picker-status" class="notice" role="status" aria-live="polite"></div><div id="service-picker-results" class="service-results" role="listbox" aria-label="Notification destinations"></div></div>`;
+    this._servicePickerDialog = dialog;
+    dialog.addEventListener("cancel", (event) => { event.preventDefault(); dialog.close(); });
+    dialog.addEventListener("close", () => {
+      if (this._servicePickerDialog === dialog) this._servicePickerDialog = null;
+      dialog.remove();
+      if (this._servicePickerHistoryEntry) {
+        this._servicePickerHistoryCleanup = true;
+        history.back();
+      }
+      this.shadowRoot.querySelector(`[data-action="open-service-picker"][data-service-field="${this._servicePickerField}"]`)?.focus();
+      this._servicePickerField = "";
+      this._servicePickerItems = [];
+    });
+    this.shadowRoot.append(dialog);
+    dialog.showModal();
+    const state = history.state && typeof history.state === "object" ? history.state : {};
+    history.pushState({ ...state, householdAlarmServicePicker: true }, "");
+    this._servicePickerHistoryEntry = true;
+    dialog.querySelector("[data-service-query]").focus();
+    this._renderServicePickerResults();
+  }
+
+  _closeServicePicker() {
+    this._servicePickerDialog?.close();
+  }
+
+  _renderServicePickerResults(query = "") {
+    const dialog = this._servicePickerDialog;
+    if (!dialog) return;
+    const normalized = query.trim().toLocaleLowerCase();
+    const matches = this._servicePickerItems.filter((item) =>
+      `${item.label} ${item.detail}`.toLocaleLowerCase().includes(normalized)
+    );
+    const status = dialog.querySelector("#service-picker-status");
+    status.textContent = matches.length
+      ? `${matches.length} destination${matches.length === 1 ? "" : "s"}`
+      : "No matching destinations.";
+    dialog.querySelector("#service-picker-results").innerHTML = matches.map((item) => {
+      const index = this._servicePickerItems.indexOf(item);
+      const label = item.unavailable ? `${item.label} (not currently available)` : item.label;
+      return `<button type="button" class="service-option" role="option" aria-selected="${this._draft[this._servicePickerField] === item.service}" data-action="choose-service" data-service-index="${index}" data-service-value="${esc(item.service)}"><span>${esc(label)}</span><small>${esc(item.detail)}</small></button>`;
+    }).join("");
+  }
+
   _scheduleTrackSearch(query, immediate = false) {
     this._trackQuery = query;
     clearTimeout(this._trackSearchTimer);
@@ -628,7 +724,7 @@ class HouseholdAlarmsCard extends HTMLElement {
       this._trackServer = result.server_id;
       this._trackStatus = this._tracks.length
         ? "Choose a song below. Save the alarm to keep it."
-        : "No songs found. Add the song to this MA library, then search again.";
+        : "No songs found. Try fewer words or check the selected MA library.";
     } catch (error) {
       if (generation !== this._trackSearchGeneration || !this._songPickerDialog) return;
       this._trackStatus = error.message || "Song search failed. Check the selected MA speaker.";
@@ -688,6 +784,7 @@ class HouseholdAlarmsCard extends HTMLElement {
   _input(event) {
     const input = event.target;
     if (input.hasAttribute("data-track-query")) { this._scheduleTrackSearch(input.value); return; }
+    if (input.hasAttribute("data-service-query")) { this._renderServicePickerResults(input.value); return; }
     if (!this._draft || !input.dataset.field) return;
     if (input.tagName === "SELECT" || input.type === "checkbox") return;
     this._draft[input.dataset.field] = input.type === "number" ? Number(input.value) : input.value;
@@ -852,6 +949,8 @@ class HouseholdAlarmsCard extends HTMLElement {
     const action = button.dataset.action;
     if (action === "choose-song") { this._openSongPicker(); return; }
     if (action === "close-song-picker") { this._closeSongPicker(); return; }
+    if (action === "open-service-picker") { this._openServicePicker(button.dataset.serviceField); return; }
+    if (action === "close-service-picker") { this._closeServicePicker(); return; }
     if (action === "editor-mode" && this._draft) {
       const group = button.dataset.modeGroup, mode = button.dataset.mode;
       this._changeEditorMode(group, mode);
@@ -872,6 +971,16 @@ class HouseholdAlarmsCard extends HTMLElement {
         this._closeSongPicker();
         this._renderEditor();
         this.shadowRoot.querySelector('[data-action="change-track"]')?.focus();
+      }
+      return;
+    }
+    if (action === "choose-service") {
+      const option = this._servicePickerItems[Number(button.dataset.serviceIndex)];
+      const field = this._servicePickerField;
+      if (option && field && this._draft) {
+        this._draft[field] = option.service;
+        this._closeServicePicker();
+        this._renderEditor();
       }
       return;
     }

@@ -180,6 +180,7 @@ class ScheduledMusicTests(unittest.IsolatedAsyncioTestCase):
         self.run = fixture.run_at(datetime.now(timezone.utc))
         self.manager.runs[self.alarm['id']] = self.run
         self.calls = []
+        self.search_responses = {}
         self.ready = True
         self.owned = True
         self.state = 'playing'
@@ -227,6 +228,8 @@ class ScheduledMusicTests(unittest.IsolatedAsyncioTestCase):
                 self.volume_level = kwargs.get('volume_level', self.volume_level)
             return {'protocol': 2, 'owned': self.owned, 'state': self.state}
         if name == 'music/tracks/library_items':
+            if kwargs['search'] in self.search_responses:
+                return deepcopy(self.search_responses[kwargs['search']])
             return [{'uri': 'library://track/42', 'name': '<Song>', 'artists': [{'name': 'Artist'}], 'private': 'do not return'},
                     {'uri': 'https://example.invalid/song', 'name': 'Wrong'}]
         raise AssertionError(name)
@@ -489,6 +492,25 @@ class ScheduledMusicTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(args['limit'], 20)
         self.assertEqual(args['search'], 'Song')
         self.assertEqual(self.count('alarm_start'), 0)
+
+    async def test_multiword_search_falls_back_to_words_and_ranks_all_term_matches(self):
+        song = {'uri': 'library://track/42', 'name': 'Call Me Little Sunshine', 'artists': [{'name': 'Ghost'}]}
+        self.search_responses = {
+            'Ghost little': [],
+            'ghost': [song, {'uri': 'library://track/43', 'name': 'Ghost', 'artists': []}],
+            'little': [song, {'uri': 'library://track/44', 'name': 'A Little Song', 'artists': []}],
+        }
+        result = await music.search_tracks(
+            self.hass, self.alarm['speaker'], 'Ghost little',
+            resolver=self.resolver, server_resolver=self.server_resolver,
+        )
+        uris = [track['uri'] for track in result['tracks']]
+        self.assertEqual(uris[0], 'library://track/42')
+        self.assertEqual(set(uris[1:]), {'library://track/43', 'library://track/44'})
+        self.assertEqual(
+            [args['search'] for name, args in self.calls if name == 'music/tracks/library_items'],
+            ['Ghost little', 'ghost', 'little'],
+        )
 
     async def test_old_test_protocol_rejected(self):
         self.client.send_command = AsyncMock(return_value={'protocol': 1, 'ready': True})

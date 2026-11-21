@@ -39,7 +39,7 @@
   Object.assign(defaults,{music_enabled:false,music_track:'',music_track_name:'',music_server:'',music_gain:25,speech_delay:0});
   Object.assign(defaults,{phone_enabled:false,phone_service:'',phone_wake_screen:true});
   Object.assign(defaults,{music_ramp_enabled:false,music_ramp_step:5,music_ramp_seconds:30});
-  const data = {revision:0, alarms:[], defaults, assistants:[{id:'pipeline-jarvis',name:'JARVIS morning voice'}], warnings:[], notify_services:["notify.adults"], test_results:{}};
+  const data = {revision:0, alarms:[], defaults, assistants:[{id:'pipeline-jarvis',name:'JARVIS morning voice'}], warnings:[], notify_services:["notify.adults","notify.mobile_app_daniels_galaxy_s23","notify.mobile_app_android_phone"], test_results:{}};
   data.phone_targets=[{service:'notify.mobile_app_android_phone',android:true},{service:'notify.mobile_app_iphone',android:false}];
   const push = () => subscriber?.(deep(data));
   const states = Object.fromEntries([
@@ -267,10 +267,30 @@
     await set('notify_enabled',false);
     test('help destination is hidden when help alerts are off', !q('[data-field="notify_service"]'));
     await set('notify_enabled',true);
-    await set("notify_service","notify.adults");
+    {
+      const pushState=history.pushState, back=history.back;
+      let backCalls=0;
+      history.pushState=()=>{};
+      history.back=()=>{backCalls++;};
+      q('[data-action="open-service-picker"][data-service-field="notify_service"]').click(); await flush();
+      const dialog=q('.service-picker-dialog');
+      card._handleEntitySearchBack();
+      await flush();
+      test('phone Back closes notification destination picker first', !!dialog && !dialog.open && !card._servicePickerHistoryEntry && backCalls===0);
+      history.pushState=pushState; history.back=back;
+    }
+    q('[data-action="open-service-picker"][data-service-field="notify_service"]').click(); await flush();
+    q('[data-service-query]').value='daniels';
+    q('[data-service-query]').dispatchEvent(new Event('input',{bubbles:true})); await flush();
+    test('Help alerts destination picker searches available notification services', qAll('[data-action="choose-service"]').length===1 && q('[data-action="choose-service"]').dataset.serviceValue==='notify.mobile_app_daniels_galaxy_s23');
+    q('[data-service-query]').value='adults';
+    q('[data-service-query]').dispatchEvent(new Event('input',{bubbles:true})); await flush();
+    const adultsOption=q('[data-action="choose-service"]');
+    test('notification destination search shows a readable name and service id', adultsOption.textContent.includes('Adults') && adultsOption.textContent.includes('notify.adults'));
+    adultsOption.click(); await flush();
     test('collapsed help summary updates with destination', q('[data-summary="help-alerts"]').textContent.includes('Adults'));
     test('alert purpose is explained without jargon', q('#editor').textContent.includes('Let someone know') && q('#editor').textContent.includes('speaker cannot play the alarm') && !q('#editor').textContent.includes('playback failure'));
-    test('notification choices have readable names', q('[data-field="notify_service"]').selectedOptions[0].textContent === 'Adults');
+    test('notification choice is shown as the selected destination', q('[data-field="notify_service"]').textContent === 'Adults');
     const focus=q('[data-field="name"]'); focus.focus(); const typed=focus.value;
     push(); await flush();
     test("runtime updates preserve editor and focus", q('[data-field="name"]') === focus && focus.value === typed);
@@ -454,8 +474,12 @@
     await card._searchTracks('Test',++card._trackSearchGeneration);
     await click('choose-track');
     await set('phone_enabled',true);
-    test('phone controls have a separate Companion-only recipient selector', !!q('[data-field="phone_service"]') && ![...q('[data-field="phone_service"]').options].some((o) => o.value==='notify.adults'));
-    await set('phone_service','notify.mobile_app_android_phone');
+    test('phone controls expose a recipient picker restricted to phone targets', !!q('[data-action="open-service-picker"][data-service-field="phone_service"]') && card._servicePickerOptions('phone_service').every((item) => !item.service || item.service.startsWith('notify.mobile_app_')));
+    q('[data-action="open-service-picker"][data-service-field="phone_service"]').click(); await flush();
+    q('[data-service-query]').value='android';
+    q('[data-service-query]').dispatchEvent(new Event('input',{bubbles:true})); await flush();
+    test('phone-control recipient picker searches only available phone targets', qAll('[data-action="choose-service"]').length===1 && q('[data-action="choose-service"]').dataset.serviceValue==='notify.mobile_app_android_phone');
+    q('[data-action="choose-service"]').click(); await flush();
     await set('phone_wake_screen',false);
     test('screen wake can be independently disabled', !card._draft.phone_wake_screen && q('#editor').textContent.includes('Anyone holding the phone'));
     await card._save(); await flush();
