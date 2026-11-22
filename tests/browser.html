@@ -20,6 +20,12 @@
   const registryEntries = [
     {entity_id:"media_player.bedroom_speaker",platform:"alexa_media"},
     {entity_id:"media_player.lottie_s_speaker",platform:"music_assistant"},
+    {entity_id:"media_player.disabled_music",platform:"music_assistant",disabled_by:"user"},
+    {entity_id:"media_player.disabled_cast",platform:"cast",disabled_by:"user"},
+    {entity_id:"media_player.offline_music",platform:"music_assistant"},
+    {entity_id:"media_player.unknown_music",platform:"music_assistant"},
+    {entity_id:"media_player.restored_music",platform:"music_assistant"},
+    {entity_id:"media_player.missing_music",platform:"music_assistant"},
   ];
   HTMLMediaElement.prototype.play = function () { mediaCalls.push(['play',this.src]); return playbackError ? Promise.reject(playbackError) : Promise.resolve(); };
   HTMLMediaElement.prototype.pause = function () { mediaCalls.push(['pause',this.src]); };
@@ -52,6 +58,12 @@
     ["tts.piper","Piper"], ["conversation.jarvis","JARVIS"], ["weather.home_weather","Home weather"],
     ["calendar.school_holidays","School holidays"], ["input_boolean.charlottes_bedtime","Charlotte bedtime"],
   ].map(([id,name]) => [id,{entity_id:id,state:"idle",attributes:{friendly_name:name}}]));
+  Object.assign(states, {
+    "media_player.disabled_music": {entity_id:"media_player.disabled_music",state:"idle",attributes:{}},
+    "media_player.offline_music": {entity_id:"media_player.offline_music",state:"unavailable",attributes:{restored:true}},
+    "media_player.unknown_music": {entity_id:"media_player.unknown_music",state:"unknown",attributes:{}},
+    "media_player.restored_music": {entity_id:"media_player.restored_music",state:"idle",attributes:{restored:true}},
+  });
   const hass = {states, connection:{subscribeMessage:async (handler) => { subscriber=handler; queueMicrotask(push); return () => {subscriber=null;}; }}, callWS:async (message) => {
     calls.push(deep(message));
     if (message.type === "config/entity_registry/list") {
@@ -182,9 +194,24 @@
     test('speaker selector is domain-filtered', q('[data-field="speaker"]').selector.entity.filter.domain==='media_player');
     test('sound mode selector maps Tone, Music and Voice only', q('[data-mode-group="sound"][aria-pressed="true"]').dataset.mode==='tone' && ['Tone','Music','Voice only'].every((label) => [...qAll('[data-mode-group="sound"]')].some((button) => button.textContent===label)));
     const savedTone=card._draft.tone;
+    test('Tone picker excludes disabled entities from every integration but keeps broad choices', q('[data-field="speaker"]').selector.entity.exclude_entities.includes("media_player.disabled_cast") && q('[data-field="speaker"]').selector.entity.exclude_entities.includes("media_player.disabled_music") && !q('[data-field="speaker"]').selector.entity.include_entities && !q('[data-field="speaker"]').selector.entity.filter.integration);
+    await set('speaker','media_player.disabled_cast');
+    test('existing disabled Tone speaker is retained with a warning and not offered as an extra option', card._draft.speaker==="media_player.disabled_cast" && q('[data-speaker-warning]').textContent.includes('disabled') && !q('[data-field="speaker"]').selector.entity.extra_options);
+    const beforeDisabledToneSave=calls.filter((call)=>call.type==='household_alarms/save').length;
+    await card._save(); await flush();
+    test('Tone refuses to save a disabled speaker', calls.filter((call)=>call.type==='household_alarms/save').length===beforeDisabledToneSave && q('#editor-message').textContent.includes('disabled'));
+    await mode('sound','voice');
+    test('Voice picker excludes disabled entities and retains warning for saved disabled selection', q('[data-field="speaker"]').selector.entity.exclude_entities.includes("media_player.disabled_cast") && !q('[data-field="speaker"]').selector.entity.filter.integration && q('[data-speaker-warning]').textContent.includes('disabled'));
+    await card._save(); await flush();
+    test('Voice refuses to save a disabled speaker before dispatch', calls.filter((call)=>call.type==='household_alarms/save').length===beforeDisabledToneSave && q('#editor-message').textContent.includes('disabled'));
+    await set('speaker','media_player.bedroom_speaker');
+    test('choosing an enabled non-Music-Assistant speaker clears the Voice warning', !q('[data-speaker-warning]'));
+    await mode('sound','tone');
+    await set('speaker','');
     await mode('sound','music');
     test('Music mode sets existing music setting and reveals its controls', card._draft.music_enabled && !!q('[data-action="choose-song"]') && !!q('[data-field="music_ramp_enabled"]'));
     test('Music speaker picker filters by the Music Assistant integration', q('[data-field="speaker"]').selector.entity.filter.integration==='music_assistant');
+    test('Music picker explicitly includes only enabled available players, excluding unknown restored and missing entities', JSON.stringify(q('[data-field="speaker"]').selector.entity.include_entities)===JSON.stringify(["media_player.lottie_s_speaker"]));
     await set('speaker','media_player.bedroom_speaker');
     test('Music warns about an incompatible selected speaker without clearing it', q('[data-music-speaker-warning]').textContent.includes('not a Music Assistant player') && card._draft.speaker==='media_player.bedroom_speaker');
     await mode('sound','tone');
@@ -201,6 +228,21 @@
     test('failed registry lookup blocks Music save rather than accepting an unverified player', calls.filter((call)=>call.type==='household_alarms/save').length===beforeInvalidSave && q('#editor-message').textContent.includes('Could not verify'));
     registryError=false;
     await card._loadMusicSpeakers();
+    card.hass={...hass,states:{...hass.states,"media_player.lottie_s_speaker":{entity_id:"media_player.lottie_s_speaker",state:"unavailable",attributes:{}}}};
+    test('speaker becoming unavailable is removed from the Music picker and warned about without losing selection', !q('[data-field="speaker"]').selector.entity.include_entities.includes("media_player.lottie_s_speaker") && q('[data-field="speaker"]').disabled && q('[data-music-speaker-warning]').textContent.includes('currently unavailable') && card._draft.speaker==="media_player.lottie_s_speaker");
+    await card._save(); await flush();
+    test('Music save rejects a player that becomes unavailable', calls.filter((call)=>call.type==='household_alarms/save').length===beforeInvalidSave && q('#editor-message').textContent.includes('currently unavailable'));
+    await set('speaker','');
+    test('no available players disables Music picker and explains why', q('[data-field="speaker"]').disabled && q('[data-music-speaker-warning]').textContent.includes('No enabled, available'));
+    await mode('sound','tone');
+    test('Tone picker remains usable even if no Music Assistant players are available', !q('[data-field="speaker"]').disabled && !q('[data-field="speaker"]').selector.entity.include_entities);
+    await mode('sound','music');
+    card.hass=hass;
+    await flush();
+    test('available player returning enables Music picker without an unavailable warning', !q('[data-field="speaker"]').disabled && q('[data-field="speaker"]').selector.entity.include_entities.includes("media_player.lottie_s_speaker") && !q('[data-music-speaker-warning]'));
+    await set('speaker','media_player.disabled_music');
+    await card._save(); await flush();
+    test('Music save rejects registry-disabled players even if a stale state says idle', calls.filter((call)=>call.type==='household_alarms/save').length===beforeInvalidSave && q('#editor-message').textContent.includes('disabled'));
     await set('speaker','');
     test('music-only mode exposes a clearly labelled music gain without voice delay', q('[data-field="music_gain"]').closest('label').textContent.includes('Music level (%)') && !q('[data-field="speech_delay"]'));
     await set('music_ramp_enabled',true);

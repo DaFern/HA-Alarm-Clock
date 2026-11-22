@@ -13,6 +13,7 @@ class HouseholdAlarmsCard extends HTMLElement {
     this._data = null;
     this._draft = null;
     this._musicSpeakerIds = null;
+    this._disabledSpeakerIds = null;
     this._busy = false;
     this._generation = 0;
     this._previewGeneration = 0;
@@ -63,9 +64,15 @@ class HouseholdAlarmsCard extends HTMLElement {
 
   set hass(hass) {
     if (!hass) return;
+    const previousMusicChoices = this._draft?.music_enabled
+      ? JSON.stringify([this._availableMusicSpeakerIds(), this._musicSpeakerWarning()]) : null;
     const reconnect = this._hass?.connection !== hass.connection;
     this._hass = hass;
     if (this.isConnected && (reconnect || !this._connection)) this._connect();
+    if (previousMusicChoices !== null && this.isConnected && !this._busy
+        && previousMusicChoices !== JSON.stringify([this._availableMusicSpeakerIds(), this._musicSpeakerWarning()])) {
+      this._renderEditor();
+    }
   }
 
   connectedCallback() {
@@ -212,31 +219,68 @@ class HouseholdAlarmsCard extends HTMLElement {
       const missing = value && !this._hass?.states?.[value];
       selector.hass = this._hass;
       const musicSpeaker = field === "speaker" && this._draft.music_enabled;
-      selector.selector = { entity: { filter: { domain, ...(musicSpeaker ? { integration: "music_assistant" } : {}) }, ...(!musicSpeaker && missing ? { extra_options: [{ id: value, primary: value, secondary: "Not currently available" }] } : {}) } };
+      const disabledSpeaker = field === "speaker" && this._disabledSpeakerIds?.has(value);
+      const musicSpeakers = musicSpeaker ? this._availableMusicSpeakerIds() : [];
+      selector.selector = { entity: {
+        filter: { domain, ...(musicSpeaker ? { integration: "music_assistant" } : {}) },
+        ...(musicSpeaker ? { include_entities: musicSpeakers } : {}),
+        ...(field === "speaker" ? { exclude_entities: [...(this._disabledSpeakerIds || [])] } : {}),
+        ...(!musicSpeaker && missing && !disabledSpeaker ? { extra_options: [{ id: value, primary: value, secondary: "Not currently available" }] } : {}),
+      } };
       selector.value = value || undefined;
       selector.required = field === "speaker";
-      selector.disabled = this._busy;
+      selector.disabled = this._busy || (field === "speaker" && this._disabledSpeakerIds === null)
+        || (musicSpeaker && !musicSpeakers.length);
       selector.placeholder = value ? undefined : "None";
     }
+  }
+
+  _musicSpeakerAvailable(entityId) {
+    const state = this._hass?.states?.[entityId];
+    return !!state && !["unavailable", "unknown"].includes(state.state)
+      && state.attributes?.restored !== true;
+  }
+
+  _availableMusicSpeakerIds() {
+    return [...(this._musicSpeakerIds || [])].filter((id) => this._musicSpeakerAvailable(id));
   }
 
   async _loadMusicSpeakers() {
     try {
       const entries = await this._hass.callWS({ type: "config/entity_registry/list" });
+      this._disabledSpeakerIds = new Set(entries
+        .filter((entry) => entry.entity_id.startsWith("media_player.") && entry.disabled_by)
+        .map((entry) => entry.entity_id));
       this._musicSpeakerIds = new Set(entries
         .filter((entry) => entry.platform === "music_assistant"
           && entry.entity_id.startsWith("media_player.") && !entry.disabled_by)
         .map((entry) => entry.entity_id));
     } catch (_) {
       this._musicSpeakerIds = null;
+      this._disabledSpeakerIds = null;
     }
   }
 
+  _speakerWarning() {
+    if (this._draft?.music_enabled) return this._musicSpeakerWarning();
+    if (!this._draft?.speaker) return "";
+    if (this._disabledSpeakerIds === null) return "Could not verify this speaker. Check the connection before saving.";
+    return this._disabledSpeakerIds.has(this._draft.speaker)
+      ? "This speaker is disabled. Choose an enabled speaker before saving." : "";
+  }
+
   _musicSpeakerWarning() {
-    if (!this._draft?.music_enabled || !this._draft.speaker) return "";
+    if (!this._draft?.music_enabled) return "";
+    if (!this._draft.speaker) {
+      return this._musicSpeakerIds !== null && !this._availableMusicSpeakerIds().length
+        ? "No enabled, available Music Assistant players were found. Check Music Assistant and the speakers." : "";
+    }
     if (this._musicSpeakerIds === null) return "Could not verify this speaker. Choose a Music Assistant player before saving.";
-    return this._musicSpeakerIds.has(this._draft.speaker)
-      ? "" : "This speaker is not a Music Assistant player. Choose a Music Assistant player for Music.";
+    if (!this._musicSpeakerIds.has(this._draft.speaker)) {
+      return "This speaker is not a Music Assistant player or is disabled. Choose an enabled Music Assistant player for Music.";
+    }
+    return this._musicSpeakerAvailable(this._draft.speaker)
+      ? "" : "This Music Assistant player is currently unavailable. Choose an available player before saving.";
   }
 
   _entityChanged(event) {
@@ -492,7 +536,7 @@ class HouseholdAlarmsCard extends HTMLElement {
        ? `<div class="grid">${this._field("music_ramp_step", "Increase by (percentage points)", "number", 'min="1" max="25" required')}${this._field("music_ramp_seconds", "Every (seconds)", "number", 'min="30" max="300" required')}${this._field("max_volume", "Maximum speaker volume (%)", "number", 'min="1" max="100" required')}</div><p class="mode-help" data-ramp-summary>Starts at ${esc(d.start_volume)}%, rises by ${esc(d.music_ramp_step)} percentage points every ${esc(d.music_ramp_seconds)} seconds, up to ${esc(d.max_volume)}%. It does not restart music or repeat the voice. Snooze starts again at the starting volume; changing volume yourself pauses increases for that ring. Requires an up-to-date Music Assistant app with alarm support.</p>`
       : `<div class="grid">${this._field("max_volume", "Maximum speaker volume (%)", "number", 'min="1" max="100" required')}${this._field("volume_step", "Increase per resumed ring (percentage points)", "number", 'min="0" max="25" required')}</div><p class="mode-help">No timed increases. Existing resume-volume behaviour is unchanged.</p>`;
     const soundFields = [
-      `<div class="grid">${this._entity("speaker", "Play on", "media_player", false)}</div>${this._musicSpeakerWarning() ? `<p class="notice error" role="alert" data-music-speaker-warning>${esc(this._musicSpeakerWarning())}</p>` : ""}`,
+      `<div class="grid">${this._entity("speaker", "Play on", "media_player", false)}</div>${this._speakerWarning() ? `<p class="notice error" role="alert" data-speaker-warning ${d.music_enabled ? "data-music-speaker-warning" : ""}>${esc(this._speakerWarning())}</p>` : ""}`,
       this._modeButtons("sound", soundMode, [["tone", "Tone"], ["music", "Music"], ["voice", "Voice only"]]),
       soundMode === "tone" ? `<div class="grid">${this._select("tone", "Tone", [["chime", "Chime"], ["bell", "Bell"], ["digital", "Digital"]], false)}</div>` : "",
       soundMode === "voice" ? `<p class="mode-help">Voice only uses your selected morning message. Choose one below.</p>` : "",
@@ -891,7 +935,7 @@ class HouseholdAlarmsCard extends HTMLElement {
     this._openSections = new Set();
     const draft = this._draft;
     this._loadMusicSpeakers().then(() => {
-      if (this._draft === draft && draft.music_enabled && this.isConnected) this._renderEditor();
+      if (this._draft === draft && this.isConnected) this._renderEditor();
     });
     this._renderEditor();
     this.shadowRoot.querySelector("#editor")?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -927,9 +971,15 @@ class HouseholdAlarmsCard extends HTMLElement {
   _save() {
     return this._operation(async () => {
       const { config, messageMode } = this._normalizeMessageConfig(clone(this._draft));
+      await this._loadMusicSpeakers();
+      if (this._disabledSpeakerIds === null || this._disabledSpeakerIds.has(config.speaker)) {
+        this._message = this._speakerWarning() || "Could not verify this speaker. Check the connection before saving.";
+        this._messageError = true;
+        this._focusAfterEditorRender = "speaker";
+        return;
+      }
       if (config.music_enabled) {
-        await this._loadMusicSpeakers();
-        if (!this._musicSpeakerIds?.has(config.speaker)) {
+        if (!this._musicSpeakerIds?.has(config.speaker) || !this._musicSpeakerAvailable(config.speaker)) {
           this._message = this._musicSpeakerWarning() || "Choose a Music Assistant player for Music.";
           this._messageError = true;
           this._focusAfterEditorRender = "speaker";
