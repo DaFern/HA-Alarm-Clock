@@ -16,6 +16,11 @@
   const mediaCalls = [], revokedUrls = [];
   let playbackError = null, previewError = null, previewGate = null;
   let trackError = null, trackGate = null;
+  let registryError = false;
+  const registryEntries = [
+    {entity_id:"media_player.bedroom_speaker",platform:"alexa_media"},
+    {entity_id:"media_player.lottie_s_speaker",platform:"music_assistant"},
+  ];
   HTMLMediaElement.prototype.play = function () { mediaCalls.push(['play',this.src]); return playbackError ? Promise.reject(playbackError) : Promise.resolve(); };
   HTMLMediaElement.prototype.pause = function () { mediaCalls.push(['pause',this.src]); };
   HTMLMediaElement.prototype.load = function () {};
@@ -49,6 +54,10 @@
   ].map(([id,name]) => [id,{entity_id:id,state:"idle",attributes:{friendly_name:name}}]));
   const hass = {states, connection:{subscribeMessage:async (handler) => { subscriber=handler; queueMicrotask(push); return () => {subscriber=null;}; }}, callWS:async (message) => {
     calls.push(deep(message));
+    if (message.type === "config/entity_registry/list") {
+      if (registryError) throw new Error("Registry unavailable");
+      return deep(registryEntries);
+    }
     if (message.type === "household_alarms/list") return deep(data);
     if (message.type === "household_alarms/save") {
       if (message.expected_revision !== data.revision) throw new Error("Settings changed elsewhere. Reload before saving.");
@@ -175,6 +184,24 @@
     const savedTone=card._draft.tone;
     await mode('sound','music');
     test('Music mode sets existing music setting and reveals its controls', card._draft.music_enabled && !!q('[data-action="choose-song"]') && !!q('[data-field="music_ramp_enabled"]'));
+    test('Music speaker picker filters by the Music Assistant integration', q('[data-field="speaker"]').selector.entity.filter.integration==='music_assistant');
+    await set('speaker','media_player.bedroom_speaker');
+    test('Music warns about an incompatible selected speaker without clearing it', q('[data-music-speaker-warning]').textContent.includes('not a Music Assistant player') && card._draft.speaker==='media_player.bedroom_speaker');
+    await mode('sound','tone');
+    test('Tone allows the selected non-Music-Assistant speaker without warning', !q('[data-music-speaker-warning]') && card._draft.speaker==='media_player.bedroom_speaker');
+    await mode('sound','music');
+    test('switching back to Music immediately warns about the retained incompatible speaker', q('[data-music-speaker-warning]').textContent.includes('not a Music Assistant player') && card._draft.speaker==='media_player.bedroom_speaker');
+    const beforeInvalidSave=calls.filter((call)=>call.type==='household_alarms/save').length;
+    await card._save(); await flush();
+    test('Music cannot save a non-Music-Assistant player', calls.filter((call)=>call.type==='household_alarms/save').length===beforeInvalidSave && q('#editor-message').textContent.includes('Music Assistant player') && !!card._draft);
+    await set('speaker','media_player.lottie_s_speaker');
+    test('choosing a Music Assistant player clears the inline warning', !q('[data-music-speaker-warning]'));
+    registryError=true;
+    await card._save(); await flush();
+    test('failed registry lookup blocks Music save rather than accepting an unverified player', calls.filter((call)=>call.type==='household_alarms/save').length===beforeInvalidSave && q('#editor-message').textContent.includes('Could not verify'));
+    registryError=false;
+    await card._loadMusicSpeakers();
+    await set('speaker','');
     test('music-only mode exposes a clearly labelled music gain without voice delay', q('[data-field="music_gain"]').closest('label').textContent.includes('Music level (%)') && !q('[data-field="speech_delay"]'));
     await set('music_ramp_enabled',true);
     await set('start_volume',18);
@@ -184,10 +211,12 @@
     test('volume-ramp summary updates from current editor values', q('[data-ramp-summary]').textContent.includes('Starts at 18%') && q('[data-ramp-summary]').textContent.includes('rises by 7 percentage points every 45 seconds, up to 72%'));
     await set('music_ramp_enabled',false);
     await mode('sound','voice');
+    test('Voice mode restores the broader speaker picker', !q('[data-field="speaker"]').selector.entity.filter.integration && !q('[data-music-speaker-warning]'));
     test('Voice only maps to tone fallback and keeps its repeat-volume controls', card._draft.tone==='none' && !card._draft.music_enabled && q('#editor').textContent.includes('Choose a morning message') && q('[data-field="repeat_seconds"]') && q('[data-field="volume_step"]').closest('label').textContent.includes('tone fallback'));
     q('form').dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})); await flush();
     test('Voice-only validation stays beside Save, reveals assistant choice and preserves the draft', q('#editor-message').textContent.includes('Choose a morning message') && q('#editor-message').getAttribute('role')==='alert' && card._draft.tone==='none' && !!q('[data-field="assistant_id"]') && card.shadowRoot.activeElement===q('[data-field="assistant_id"]'));
     await mode('sound','tone');
+    test('Tone mode keeps the broader speaker picker', !q('[data-field="speaker"]').selector.entity.filter.integration);
     test('switching sound modes restores the draft tone', card._draft.tone===savedTone && !card._draft.music_enabled);
     test('phone controls default off and hide their destination', !card._draft.phone_enabled && !q('[data-field="phone_service"]') && !q('[data-field="phone_wake_screen"]'));
     await set('phone_enabled',true);

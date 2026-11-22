@@ -12,6 +12,7 @@ class HouseholdAlarmsCard extends HTMLElement {
     this.attachShadow({ mode: "open" });
     this._data = null;
     this._draft = null;
+    this._musicSpeakerIds = null;
     this._busy = false;
     this._generation = 0;
     this._previewGeneration = 0;
@@ -210,12 +211,32 @@ class HouseholdAlarmsCard extends HTMLElement {
       const value = this._draft[field] || "";
       const missing = value && !this._hass?.states?.[value];
       selector.hass = this._hass;
-      selector.selector = { entity: { filter: { domain }, ...(missing ? { extra_options: [{ id: value, primary: value, secondary: "Not currently available" }] } : {}) } };
+      const musicSpeaker = field === "speaker" && this._draft.music_enabled;
+      selector.selector = { entity: { filter: { domain, ...(musicSpeaker ? { integration: "music_assistant" } : {}) }, ...(!musicSpeaker && missing ? { extra_options: [{ id: value, primary: value, secondary: "Not currently available" }] } : {}) } };
       selector.value = value || undefined;
       selector.required = field === "speaker";
       selector.disabled = this._busy;
       selector.placeholder = value ? undefined : "None";
     }
+  }
+
+  async _loadMusicSpeakers() {
+    try {
+      const entries = await this._hass.callWS({ type: "config/entity_registry/list" });
+      this._musicSpeakerIds = new Set(entries
+        .filter((entry) => entry.platform === "music_assistant"
+          && entry.entity_id.startsWith("media_player.") && !entry.disabled_by)
+        .map((entry) => entry.entity_id));
+    } catch (_) {
+      this._musicSpeakerIds = null;
+    }
+  }
+
+  _musicSpeakerWarning() {
+    if (!this._draft?.music_enabled || !this._draft.speaker) return "";
+    if (this._musicSpeakerIds === null) return "Could not verify this speaker. Choose a Music Assistant player before saving.";
+    return this._musicSpeakerIds.has(this._draft.speaker)
+      ? "" : "This speaker is not a Music Assistant player. Choose a Music Assistant player for Music.";
   }
 
   _entityChanged(event) {
@@ -471,7 +492,7 @@ class HouseholdAlarmsCard extends HTMLElement {
        ? `<div class="grid">${this._field("music_ramp_step", "Increase by (percentage points)", "number", 'min="1" max="25" required')}${this._field("music_ramp_seconds", "Every (seconds)", "number", 'min="30" max="300" required')}${this._field("max_volume", "Maximum speaker volume (%)", "number", 'min="1" max="100" required')}</div><p class="mode-help" data-ramp-summary>Starts at ${esc(d.start_volume)}%, rises by ${esc(d.music_ramp_step)} percentage points every ${esc(d.music_ramp_seconds)} seconds, up to ${esc(d.max_volume)}%. It does not restart music or repeat the voice. Snooze starts again at the starting volume; changing volume yourself pauses increases for that ring. Requires an up-to-date Music Assistant app with alarm support.</p>`
       : `<div class="grid">${this._field("max_volume", "Maximum speaker volume (%)", "number", 'min="1" max="100" required')}${this._field("volume_step", "Increase per resumed ring (percentage points)", "number", 'min="0" max="25" required')}</div><p class="mode-help">No timed increases. Existing resume-volume behaviour is unchanged.</p>`;
     const soundFields = [
-      `<div class="grid">${this._entity("speaker", "Play on", "media_player", false)}</div>`,
+      `<div class="grid">${this._entity("speaker", "Play on", "media_player", false)}</div>${this._musicSpeakerWarning() ? `<p class="notice error" role="alert" data-music-speaker-warning>${esc(this._musicSpeakerWarning())}</p>` : ""}`,
       this._modeButtons("sound", soundMode, [["tone", "Tone"], ["music", "Music"], ["voice", "Voice only"]]),
       soundMode === "tone" ? `<div class="grid">${this._select("tone", "Tone", [["chime", "Chime"], ["bell", "Bell"], ["digital", "Digital"]], false)}</div>` : "",
       soundMode === "voice" ? `<p class="mode-help">Voice only uses your selected morning message. Choose one below.</p>` : "",
@@ -868,6 +889,10 @@ class HouseholdAlarmsCard extends HTMLElement {
     this._tracks = []; this._trackQuery = "";
     this._trackStatus = ""; this._trackError = false; this._trackSearching = false;
     this._openSections = new Set();
+    const draft = this._draft;
+    this._loadMusicSpeakers().then(() => {
+      if (this._draft === draft && draft.music_enabled && this.isConnected) this._renderEditor();
+    });
     this._renderEditor();
     this.shadowRoot.querySelector("#editor")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
@@ -902,6 +927,15 @@ class HouseholdAlarmsCard extends HTMLElement {
   _save() {
     return this._operation(async () => {
       const { config, messageMode } = this._normalizeMessageConfig(clone(this._draft));
+      if (config.music_enabled) {
+        await this._loadMusicSpeakers();
+        if (!this._musicSpeakerIds?.has(config.speaker)) {
+          this._message = this._musicSpeakerWarning() || "Choose a Music Assistant player for Music.";
+          this._messageError = true;
+          this._focusAfterEditorRender = "speaker";
+          return;
+        }
+      }
       const availableAssistant = (this._data.assistants || []).some((item) => item.id === config.assistant_id);
       if (config.tone === "none" && messageMode === "off") {
         this._message = "Choose a morning message before saving Voice only.";
