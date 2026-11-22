@@ -76,7 +76,7 @@
             queue_modes = capability["queue_modes"]
         if (not self._valid_alarm_queue_modes(queue_modes)
                 or queue_modes != capability["queue_modes"]):
-            raise InvalidDataError("The development queue settings changed; retry the alarm")
+            raise InvalidDataError("The Music Assistant queue settings changed; check the alarm before trying again")
         if (not isinstance(track_uri, str) or not track_uri.startswith("library://track/")
                 or not track_uri.removeprefix("library://track/").isascii()
                 or not track_uri.removeprefix("library://track/").isdigit()):
@@ -90,7 +90,7 @@
         if not isinstance(message, str) or len(message) > 4096:
             raise InvalidDataError("Invalid alarm message")
         if message and tts_engine not in {engine["uid"] for engine in capability["engines"]}:
-            raise InvalidDataError("Select this Home Assistant voice through its MA provider")
+            raise InvalidDataError("Select this Home Assistant voice through its Music Assistant provider")
         mixer = self.mass.streams.audio.briefings
         if mixer.has_run(queue_id, run_id):
             raise InvalidDataError("This alarm start was already attempted")

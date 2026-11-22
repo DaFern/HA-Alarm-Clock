@@ -23,7 +23,7 @@ def resolve_client(hass, speaker):
     registered = entity_registry.async_get(hass).async_get(speaker)
     entry = hass.config_entries.async_get_entry(registered.config_entry_id) if registered else None
     if entry is None or entry.domain != "music_assistant":
-        raise AlarmError("Choose the Music Assistant development server's speaker entity")
+        raise AlarmError("Choose a Music Assistant speaker")
     client = get_music_assistant_client(hass, entry.entry_id)
     player_id = registered.unique_id
     # Resolve by the actual registered identifier, never by a friendly-name match.
@@ -79,7 +79,7 @@ class MusicTests:
             raise
         except Exception:
             # Do not expose upstream errors containing personal text or audio URLs.
-            raise AlarmError("Music Assistant did not confirm the command. Check its connection and development build; do not retry playback blindly.") from None
+            raise AlarmError("Music Assistant did not confirm the command. Check its connection and the speaker before trying playback again.") from None
 
     async def async_check(self, speaker, assistant_id):
         pipeline = resolve_assistant(self.manager.hass, assistant_id, voice=True)
@@ -88,13 +88,13 @@ class MusicTests:
             async with asyncio.timeout(15):
                 result = await client.send_command("player_queues/briefing_test_capabilities", queue_id=queue_id)
         except Exception:
-            raise AlarmError("This speaker needs the patched MA development build. The normal Music Assistant app is not changed or supported by this test.") from None
+            raise AlarmError("This version of Music Assistant does not support the music test. Update Music Assistant and try again.") from None
         if not isinstance(result, dict) or result.get("protocol") != PROTOCOL:
-            raise AlarmError("The MA development test protocol is incompatible")
+            raise AlarmError("This version of Music Assistant is incompatible with the music test. Update Music Assistant.")
         matches = [engine for engine in result.get("engines", [])
                    if engine.get("entity_id") == pipeline.tts_engine]
         if len(matches) != 1:
-            raise AlarmError("The assistant's exact HA voice must be available through one MA Home Assistant provider. Missing or ambiguous voices are not substituted.")
+            raise AlarmError("The assistant's selected voice must be available through one Home Assistant provider in Music Assistant. Missing or ambiguous voices are not substituted.")
         reasons = result.get("reasons", [])
         return {"ready": result.get("ready") is True, "reasons": reasons}, client, queue_id, pipeline, matches[0]["uid"]
 
@@ -125,7 +125,7 @@ class MusicTests:
         # Reserve synchronously before any network operation can interleave.
         self.members = self.manager._reserve(speaker, run_id)
         self.session = {"id": run_id, "alarm_id": alarm_id, "speaker": speaker,
-                        "status": "preparing", "track": "", "message": "Checking the development server…",
+                        "status": "preparing", "track": "", "message": "Checking Music Assistant…",
                         "volume_level": volume_level, "music_gain": music_gain,
                         "snooze_seconds": snooze_seconds, "max_minutes": 30}
         self.event = asyncio.Event()
@@ -164,7 +164,7 @@ class MusicTests:
         result = await self._send("player_queues/briefing_test_control", queue_id=self.queue_id,
                                   run_id=self.playback_id, action=action, **extra)
         if not isinstance(result, dict) or result.get("protocol") != self.protocol:
-            raise AlarmError("MA returned an incompatible test-control response")
+            raise AlarmError("Music Assistant returned an incompatible test-control response")
         if result.get("restoration_failed"):
             raise AlarmError("Alarm stopped, but previous music restoration was not confirmed")
         return result
@@ -230,11 +230,11 @@ class MusicTests:
             if isinstance(tracks, dict):
                 tracks = tracks.get("items", [])
             if not isinstance(tracks, list) or not tracks:
-                raise AlarmError("The development server needs at least one library song")
+                raise AlarmError("Add at least one song to the Music Assistant library")
             track = tracks[0]
             uri = track.get("uri", "")
             if not isinstance(uri, str) or not uri.startswith("library://track/"):
-                raise AlarmError("MA did not return a playable library song")
+                raise AlarmError("Music Assistant did not return a playable library song")
             self.session["track"] = str(track.get("name", "Library song"))[:200]
             self.session["message"] = "Preparing the selected assistant's morning message…"
             self.manager.changed()
@@ -255,7 +255,7 @@ class MusicTests:
                 music_gain=self.session["music_gain"], **extra,
                 volume_level=self.session["volume_level"])
             if not isinstance(result, dict) or result.get("protocol") != self.protocol:
-                raise AlarmError("MA did not confirm a compatible music-test start")
+                raise AlarmError("Music Assistant did not confirm a compatible music-test start")
             self.session.update(status="playing", message="Listen for music under the message. Acceptance does not prove it was audible.")
             self.manager.changed()
             ramp = None
@@ -315,7 +315,7 @@ class MusicTests:
             self.desired = "dismissed"
             raise
         except Exception as err:
-            self.session.update(status="failed", message=str(err) if isinstance(err, AlarmError) else "The development music test failed. Check MA and the chosen assistant.")
+            self.session.update(status="failed", message=str(err) if isinstance(err, AlarmError) else "The music test failed. Check Music Assistant and the chosen assistant.")
         finally:
             await self._finish()
 
@@ -330,7 +330,7 @@ class MusicTests:
                 self.session.update(status=self.desired if self.desired in TERMINAL else "finished",
                                     message="Music test stopped. Saved alarms and sleep switches were not changed.")
         except Exception:
-            self.session.update(status="uncertain", message="MA could not confirm the stop. Check the speaker, then press Dismiss to retry a guarded stop. No playback will be retried.")
+            self.session.update(status="uncertain", message="Music Assistant could not confirm the stop. Check the speaker, then press Dismiss to retry a guarded stop. No playback will be retried.")
         finally:
             if self.session["status"] != "uncertain":
                 for member in self.members:

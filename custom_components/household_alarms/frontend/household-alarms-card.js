@@ -306,7 +306,7 @@ class HouseholdAlarmsCard extends HTMLElement {
     const summary = this.shadowRoot.querySelector("[data-ramp-summary]");
     if (!summary || !this._draft) return;
     const d = this._draft;
-    summary.textContent = `Starts at ${d.start_volume}%, rises by ${d.music_ramp_step} percentage points every ${d.music_ramp_seconds} seconds, up to ${d.max_volume}%. It does not restart music or repeat the voice. Snooze starts again at the starting volume; changing volume yourself pauses increases for that ring. Requires the updated MA companion.`;
+    summary.textContent = `Starts at ${d.start_volume}%, rises by ${d.music_ramp_step} percentage points every ${d.music_ramp_seconds} seconds, up to ${d.max_volume}%. It does not restart music or repeat the voice. Snooze starts again at the starting volume; changing volume yourself pauses increases for that ring. Requires an up-to-date Music Assistant app with alarm support.`;
   }
 
   _updateSectionSummaries() {
@@ -468,7 +468,7 @@ class HouseholdAlarmsCard extends HTMLElement {
       ? `<div class="days" role="group" aria-label="Days that require a calendar match">${DAYS.map((day, i) => `<label class="day-option${(d.calendar_match_days || []).includes(i) ? " selected" : ""}"><input type="checkbox" data-calendar-match-day="${i}" ${(d.calendar_match_days || []).includes(i) ? "checked" : ""} ${!d.weekdays.includes(i) ? "disabled" : ""}>${day}</label>`).join("")}</div><p>Checked days need a matching event. Other selected repeat days ring without one.</p>`
       : "";
     const musicRampFields = d.music_ramp_enabled
-       ? `<div class="grid">${this._field("music_ramp_step", "Increase by (percentage points)", "number", 'min="1" max="25" required')}${this._field("music_ramp_seconds", "Every (seconds)", "number", 'min="30" max="300" required')}${this._field("max_volume", "Maximum speaker volume (%)", "number", 'min="1" max="100" required')}</div><p class="mode-help" data-ramp-summary>Starts at ${esc(d.start_volume)}%, rises by ${esc(d.music_ramp_step)} percentage points every ${esc(d.music_ramp_seconds)} seconds, up to ${esc(d.max_volume)}%. It does not restart music or repeat the voice. Snooze starts again at the starting volume; changing volume yourself pauses increases for that ring. Requires the updated MA companion.</p>`
+       ? `<div class="grid">${this._field("music_ramp_step", "Increase by (percentage points)", "number", 'min="1" max="25" required')}${this._field("music_ramp_seconds", "Every (seconds)", "number", 'min="30" max="300" required')}${this._field("max_volume", "Maximum speaker volume (%)", "number", 'min="1" max="100" required')}</div><p class="mode-help" data-ramp-summary>Starts at ${esc(d.start_volume)}%, rises by ${esc(d.music_ramp_step)} percentage points every ${esc(d.music_ramp_seconds)} seconds, up to ${esc(d.max_volume)}%. It does not restart music or repeat the voice. Snooze starts again at the starting volume; changing volume yourself pauses increases for that ring. Requires an up-to-date Music Assistant app with alarm support.</p>`
       : `<div class="grid">${this._field("max_volume", "Maximum speaker volume (%)", "number", 'min="1" max="100" required')}${this._field("volume_step", "Increase per resumed ring (percentage points)", "number", 'min="0" max="25" required')}</div><p class="mode-help">No timed increases. Existing resume-volume behaviour is unchanged.</p>`;
     const soundFields = [
       `<div class="grid">${this._entity("speaker", "Play on", "media_player", false)}</div>`,
@@ -477,7 +477,7 @@ class HouseholdAlarmsCard extends HTMLElement {
       soundMode === "voice" ? `<p class="mode-help">Voice only uses your selected morning message. Choose one below.</p>` : "",
       soundMode === "voice" && messageMode === "off" ? '<p class="error" role="alert">Choose a morning message to use Voice only.</p>' : "",
       soundMode === "music" ? [
-        '<p class="mode-help">Requires the updated HA-AlarmClock MA companion and one ungrouped speaker. Snooze and Dismiss remove only the alarm item and resume the music it interrupted. A snooze wake-up starts a fresh alarm segment, preserving the music then playing. Playback changes made elsewhere are left alone.</p>',
+        '<p class="mode-help">Requires an up-to-date Music Assistant app with alarm support and one ungrouped speaker. Snooze and Dismiss remove only the alarm item and resume the music it interrupted. A snooze wake-up starts a fresh alarm segment, preserving the music then playing. Playback changes made elsewhere are left alone.</p>',
         this._songPicker(),
         `<div class="grid">${this._field("start_volume", "Starting speaker volume (%)", "number", 'min="1" max="100" required')}</div>`,
         this._check("music_ramp_enabled", "Increase speaker volume over time"), musicRampFields,
@@ -724,7 +724,7 @@ class HouseholdAlarmsCard extends HTMLElement {
       this._trackServer = result.server_id;
       this._trackStatus = this._tracks.length
         ? "Choose a song below. Save the alarm to keep it."
-        : "No songs found. Try fewer words or check the selected MA library.";
+        : "No songs found. Try fewer words or check the selected Music Assistant library.";
     } catch (error) {
       if (generation !== this._trackSearchGeneration || !this._songPickerDialog) return;
       this._trackStatus = error.message || "Song search failed. Check the selected MA speaker.";

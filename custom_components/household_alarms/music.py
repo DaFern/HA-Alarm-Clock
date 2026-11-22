@@ -26,26 +26,26 @@ async def command(client, name, *, timeout=90, **data):
     except asyncio.CancelledError:
         raise
     except Exception:
-        raise AlarmError("Music Assistant did not confirm the operation. Check the pinned HA-AlarmClock companion build and speaker; playback is not retried blindly.") from None
+        raise AlarmError("Music Assistant did not confirm the operation. Check Music Assistant and the speaker before trying playback again.") from None
 
 
 async def capabilities(client, queue_id):
     result = await command(client, "player_queues/alarm_capabilities", queue_id=queue_id, timeout=15)
     if not isinstance(result, dict) or result.get("protocol") != PROTOCOL or not FEATURES <= set(result.get("features", [])):
-        raise AlarmError("Music alarms require the updated HA-AlarmClock MA companion (protocol 2 with queue_mode_lease)")
+        raise AlarmError("This version of Music Assistant does not support music alarms. Update Music Assistant.")
     modes = result.get("queue_modes")
     if (not isinstance(modes, dict)
             or not isinstance(modes.get("repeat_mode"), str)
             or (modes.get("autoplay_override") is not None
                 and type(modes.get("autoplay_override")) is not bool)
             or type(modes.get("autoplay_enabled")) is not bool):
-        raise AlarmError("Music alarms need a companion that can preserve the queue's Repeat and Autoplay settings")
+        raise AlarmError("Music Assistant could not confirm the queue's Repeat and Autoplay settings. Check Music Assistant before trying again.")
     return result
 
 
 def require_ramp(alarm, ready):
     if alarm.get("music_ramp_enabled") and "volume_ramp" not in ready.get("features", []):
-        raise AlarmError("Timed volume increases need the updated MA companion (volume_ramp). Turn off the ramp or update the companion")
+        raise AlarmError("This version of Music Assistant does not support timed volume increases. Update Music Assistant or turn off the volume ramp.")
 
 
 class MusicVolumeRamp:

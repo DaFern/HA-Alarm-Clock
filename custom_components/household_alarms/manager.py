@@ -779,7 +779,7 @@ class AlarmManager:
             async with self.lock:
                 if self.runs.get(alarm_id) is run:
                     if alarm["music_enabled"]:
-                        run["error"] = (str(err) if isinstance(err, AlarmError) else "The music alarm could not play. Check the companion and speaker.")
+                        run["error"] = (str(err) if isinstance(err, AlarmError) else "The music alarm could not play. Check Music Assistant and the speaker.")
                         if run.get("music_blocked"):
                             run["error"] += " Automatic playback for this run is blocked; check the speaker and dismiss the alarm."
                     else:

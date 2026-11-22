@@ -14,12 +14,12 @@
         if not preserve_queue and (queue.state != PlaybackState.IDLE or player.state.playback_state != PlaybackState.IDLE):
             reasons.append("Stop existing playback before testing")
         if not preserve_queue and self._queue_data[queue_id].items:
-            reasons.append("Use an empty development queue; existing queues are not replaced")
+            reasons.append("Use an empty Music Assistant queue; existing queues are not replaced")
         if (preserve_queue and player.state.playback_state != PlaybackState.IDLE
                 and player.state.active_source not in (None, queue_id)):
             reasons.append("Select the Music Assistant queue as the speaker source before using an alarm")
         if not preserve_queue and (queue.repeat_mode != RepeatMode.OFF or queue.autoplay_enabled):
-            reasons.append("Turn off Repeat and Autoplay on the development queue")
+            reasons.append("Turn off Repeat and Autoplay on the Music Assistant queue for this experimental test")
         if queue.overlay_enabled:
             reasons.append("Turn off the ambient overlay before testing")
         return {"protocol": 1, "ready": not reasons, "reasons": reasons,
@@ -47,7 +47,7 @@
         if type(volume_level) is not int or not 1 <= volume_level <= 40:
             raise InvalidDataError("Test volume must be between 1 and 40 percent")
         if tts_engine not in {engine["uid"] for engine in capability["engines"]}:
-            raise InvalidDataError("Select this Home Assistant voice through its MA provider")
+            raise InvalidDataError("Select this Home Assistant voice through its Music Assistant provider")
         mixer = self.mass.streams.audio.briefings
         if mixer.has_run(queue_id, run_id):
             raise InvalidDataError("This briefing run was already attempted")
@@ -59,7 +59,7 @@
             await self.play_media(queue_id, track_uri, option=QueueOption.ADD)
             items = self._queue_data[queue_id].items
             if len(items) != 1 or items[0].uri != track_uri:
-                raise InvalidDataError("The development queue changed; test not started")
+                raise InvalidDataError("The Music Assistant queue changed; test not started")
             player = self.mass.players.get_player(queue_id)
             if player is None:
                 raise PlayerUnavailableError("Test player became unavailable")

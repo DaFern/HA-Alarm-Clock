@@ -306,7 +306,7 @@ class ScheduledMusicTests(unittest.IsolatedAsyncioTestCase):
     async def test_ramp_requires_feature_before_message_or_playback(self):
         self.alarm['music_ramp_enabled'] = True
         self.manager.async_briefing = AsyncMock()
-        with self.assertRaisesRegex(fixture.model.AlarmError, 'updated MA companion'):
+        with self.assertRaisesRegex(fixture.model.AlarmError, 'Update Music Assistant'):
             await self.delivery.play()
         self.manager.async_briefing.assert_not_awaited()
         self.assertEqual(self.count('alarm_start'), 0)
@@ -542,7 +542,7 @@ class ScheduledMusicTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_companion_without_queue_mode_lease_is_rejected_before_start(self):
         self.features.remove('queue_mode_lease')
-        with self.assertRaisesRegex(fixture.model.AlarmError, 'queue_mode_lease'):
+        with self.assertRaisesRegex(fixture.model.AlarmError, 'Update Music Assistant'):
             await self.delivery.play()
         self.assertEqual(self.count('alarm_start'), 0)
 

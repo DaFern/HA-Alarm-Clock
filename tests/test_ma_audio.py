@@ -131,7 +131,7 @@ class MusicTestTests(unittest.IsolatedAsyncioTestCase):
         await self.start()
         await self.tests.task
         self.assertEqual(self.count('briefing_test_start'), 0)
-        self.assertIn('exact HA voice', self.tests.session['message'])
+        self.assertIn("assistant's selected voice", self.tests.session['message'])
 
     async def test_ambiguous_voice_is_rejected(self):
         self.engines *= 2
