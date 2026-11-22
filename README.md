@@ -21,7 +21,8 @@ labels and refreshes them across local midnight. Disabled alarms show
 **Next: Not scheduled**.
 
 Scheduled music and confirmed saved-alarm Tests now require companion protocol 2
-with `restore_playback` (in addition to `preserve_queue`). Each alarm segment
+with `restore_playback` (in addition to `preserve_queue`). The latest project-only
+follow-up also requires `queue_mode_lease`. Each alarm segment
 captures the currently playing queue item and position, then adds/starts its own
 unique alarm item. Snooze and Dismiss remove only that alarm item and resume the
 interrupted music if its item still exists. Stopped/paused queues stay stopped.
@@ -36,14 +37,16 @@ Tests. When enabled, it regenerates the configured message once per intentional
 snooze wake-up. Ordinary song loops and same-ring retries/restarts never repeat
 speech. Restored music is user-owned: changing the sleep entity does not stop it.
 The existing optional turn-sleep-switch-off-on-dismissal behavior is unchanged.
-Repeat, Autoplay, grouped speakers and ambient overlays remain unsupported.
+Scheduled alarms now lease the queue's Repeat and Autoplay settings: they are
+temporarily suspended while the alarm owns playback and restored afterward if
+they have not changed. This requires the new `queue_mode_lease` companion
+capability; grouped speakers and ambient overlays remain unsupported.
 
-**Deployment gate:** the installed 0.7.0b5/`46b4183` pair is unchanged and lacks
-the new `restore_playback` contract.
-Install and verify the updated companion before deploying the new integration;
-otherwise scheduled music will deliberately report an incompatible companion.
-The changes below are deployment history, not evidence of this queue behavior
-being physically tested.
+**Deployment gate:** the `queue_mode_lease` follow-up is not yet built, published,
+or deployed. The currently installed companion does not advertise it, so enabled
+Repeat/Autoplay will continue to block alarm playback until the updated companion
+and matching integration are deployed. Physical queue-state acceptance remains
+separate from offline tests.
 
 ### Project-only follow-up: timed music-volume ramp (issue #3)
 

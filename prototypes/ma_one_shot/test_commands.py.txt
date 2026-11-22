@@ -18,7 +18,7 @@
         if (preserve_queue and player.state.playback_state != PlaybackState.IDLE
                 and player.state.active_source not in (None, queue_id)):
             reasons.append("Select the Music Assistant queue as the speaker source before using an alarm")
-        if queue.repeat_mode != RepeatMode.OFF or queue.autoplay_enabled:
+        if not preserve_queue and (queue.repeat_mode != RepeatMode.OFF or queue.autoplay_enabled):
             reasons.append("Turn off Repeat and Autoplay on the development queue")
         if queue.overlay_enabled:
             reasons.append("Turn off the ambient overlay before testing")

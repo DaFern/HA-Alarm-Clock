@@ -12,7 +12,10 @@ from .ma_audio import resolve_client, resolve_server_id
 from .model import AlarmError, morning_message_due, volume
 
 PROTOCOL = 2
-FEATURES = {"selected_track", "speech_delay", "music_only", "preserve_queue", "restore_playback"}
+FEATURES = {
+    "selected_track", "speech_delay", "music_only", "preserve_queue",
+    "restore_playback", "queue_mode_lease",
+}
 
 
 async def command(client, name, *, timeout=90, **data):
@@ -29,7 +32,14 @@ async def command(client, name, *, timeout=90, **data):
 async def capabilities(client, queue_id):
     result = await command(client, "player_queues/alarm_capabilities", queue_id=queue_id, timeout=15)
     if not isinstance(result, dict) or result.get("protocol") != PROTOCOL or not FEATURES <= set(result.get("features", [])):
-        raise AlarmError("Music alarms require the updated HA-AlarmClock MA companion (protocol 2 with restore_playback)")
+        raise AlarmError("Music alarms require the updated HA-AlarmClock MA companion (protocol 2 with queue_mode_lease)")
+    modes = result.get("queue_modes")
+    if (not isinstance(modes, dict)
+            or not isinstance(modes.get("repeat_mode"), str)
+            or (modes.get("autoplay_override") is not None
+                and type(modes.get("autoplay_override")) is not bool)
+            or type(modes.get("autoplay_enabled")) is not bool):
+        raise AlarmError("Music alarms need a companion that can preserve the queue's Repeat and Autoplay settings")
     return result
 
 
@@ -180,10 +190,20 @@ class AlarmMusic:
 
     async def control(self, action):
         result = await command(self.client, "player_queues/alarm_control", queue_id=self.queue_id,
-                               run_id=self.attempt, action=action, timeout=15)
+                               run_id=self.attempt, action=action,
+                               queue_modes=self.run.get("music_queue_modes"), timeout=15)
         if not isinstance(result, dict) or result.get("protocol") != PROTOCOL or type(result.get("owned")) is not bool:
             raise AlarmError("Music Assistant returned an incompatible alarm-control response")
         return result
+
+    async def restore_queue_modes(self):
+        """Restore settings after takeover without issuing any playback command."""
+        result = await command(self.client, "player_queues/alarm_control", queue_id=self.queue_id,
+            run_id=self.attempt, action="restore_modes",
+            queue_modes=self.run.get("music_queue_modes"), timeout=15)
+        if (not isinstance(result, dict) or result.get("protocol") != PROTOCOL
+                or type(result.get("owned")) is not bool or result["owned"]):
+            raise AlarmError("Music Assistant could not safely restore the alarm queue settings")
 
     async def _persist(self, **fields):
         async with self.manager.lock:
@@ -211,6 +231,7 @@ class AlarmMusic:
                 require_ramp(self.alarm, ready)
                 if ready.get("ready") is not True:
                     raise AlarmError("; ".join(ready.get("reasons", [])) or "The music speaker is not ready")
+                await self._persist(music_queue_modes=ready["queue_modes"])
                 message, engine, pipeline = "", "", None
                 wants_speech = morning_message_due(self.alarm, self.run) and bool(
                     self.alarm["assistant_id"] or self.alarm["briefing_enabled"])
@@ -247,6 +268,7 @@ class AlarmMusic:
                     tts_engine=engine, language=pipeline.tts_language if pipeline else None,
                     voice=pipeline.tts_voice if pipeline else None, music_gain=self.alarm["music_gain"] / 100,
                     speech_delay=self.alarm["speech_delay"],
+                    queue_modes=self.run["music_queue_modes"],
                     volume_level=round(volume(self.alarm, 0 if self.alarm.get("music_ramp_enabled") else self.run["cycles"], self.run.get("escalated", False)) * 100))
                 if not isinstance(result, dict) or result.get("protocol") != PROTOCOL or result.get("status") != "playing":
                     raise AlarmError("Music Assistant did not confirm the alarm start")
@@ -261,6 +283,7 @@ class AlarmMusic:
                 if not state["owned"]:
                     self.takeover = True
                     await self._persist(music_blocked=True, error="Music playback changed elsewhere. Other audio was left alone; dismiss this alarm to finish.")
+                    await self.restore_queue_modes()
                     return
                 warning = await ramp.tick()
                 if ramp.suspended and not self.run.get("music_ramp_suspended"):
@@ -296,7 +319,7 @@ class AlarmMusic:
                 raise AlarmError("The music stop was not confirmed")
             if stopped.get("restoration_failed"):
                 raise AlarmError("Previous music restoration was not confirmed")
-            await self._persist(music_attempt=None)
+            await self._persist(music_attempt=None, music_queue_modes=None)
         except Exception:
             await self._persist(music_blocked=True,
                 error="Music Assistant could not confirm the stop. Check the speaker manually before relying on this alarm.")

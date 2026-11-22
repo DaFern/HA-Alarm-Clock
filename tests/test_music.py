@@ -187,6 +187,11 @@ class ScheduledMusicTests(unittest.IsolatedAsyncioTestCase):
         self.start_error = False
         self.stop_error = False
         self.features = list(music.FEATURES)
+        self.queue_modes = {
+            'repeat_mode': 'all',
+            'autoplay_override': None,
+            'autoplay_enabled': True,
+        }
         self.volume_level = 20
         self.manual_volume = False
         self.client = types.SimpleNamespace(send_command=self.command)
@@ -208,9 +213,12 @@ class ScheduledMusicTests(unittest.IsolatedAsyncioTestCase):
         if name.endswith('capabilities'):
             return {'protocol': 2, 'features': self.features, 'ready': self.ready,
                     'reasons': ['Queue is busy'] if not self.ready else [],
+                    'queue_modes': deepcopy(self.queue_modes),
                     'engines': [{'entity_id': 'tts.piper', 'uid': 'ha/tts.piper'}]}
         if name.endswith('alarm_start'):
             self.assertEqual(self.manager.store.data['runs'][self.alarm['id']]['music_attempt'], kwargs['run_id'])
+            self.assertEqual(self.manager.store.data['runs'][self.alarm['id']]['music_queue_modes'], self.queue_modes)
+            self.assertEqual(kwargs['queue_modes'], self.queue_modes)
             self.assertTrue(self.manager.store.data['runs'][self.alarm['id']]['briefing_attempted'])
             if self.start_error:
                 raise TimeoutError('private URL')
@@ -223,6 +231,8 @@ class ScheduledMusicTests(unittest.IsolatedAsyncioTestCase):
         if name.endswith('alarm_control'):
             if kwargs['action'] == 'stop' and self.stop_error:
                 raise TimeoutError('private URL')
+            if kwargs['action'] == 'restore_modes':
+                return {'protocol': 2, 'owned': self.owned, 'restored_modes': not self.owned}
             if kwargs['action'] == 'restart':
                 self.state = 'playing'
                 self.volume_level = kwargs.get('volume_level', self.volume_level)
@@ -460,6 +470,17 @@ class ScheduledMusicTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.run['music_blocked'])
         self.assertEqual(self.count('alarm_start'), 0)
         self.assertEqual(self.count('alarm_control', 'stop'), 0)
+        self.assertEqual(self.count('alarm_control', 'restore_modes'), 1)
+        self.assertFalse(self.run.get('music_queue_modes'))
+
+    async def test_queue_preferences_are_persisted_before_alarm_dispatch(self):
+        await self.start()
+        start_args = next(args for name, args in self.calls if name.endswith('alarm_start'))
+        self.assertEqual(start_args['queue_modes'], {
+            'repeat_mode': 'all', 'autoplay_override': None, 'autoplay_enabled': True,
+        })
+        self.assertEqual(self.manager.store.data['runs'][self.alarm['id']]['music_queue_modes'],
+                         start_args['queue_modes'])
 
     async def test_uncertain_start_never_retries_and_uses_guarded_stop(self):
         self.start_error = True
@@ -477,6 +498,7 @@ class ScheduledMusicTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.run['music_attempt'])
         self.assertTrue(self.run['music_blocked'])
         self.assertNotIn('private', self.run['error'])
+        self.assertIsNotNone(self.run.get('music_queue_modes'))
 
     async def test_failed_persistence_prevents_dispatch(self):
         self.manager.store.fail = True
@@ -517,6 +539,12 @@ class ScheduledMusicTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(fixture.model.AlarmError):
             await self.delivery.play()
         self.assertFalse(self.run.get('music_attempt'))
+
+    async def test_companion_without_queue_mode_lease_is_rejected_before_start(self):
+        self.features.remove('queue_mode_lease')
+        with self.assertRaisesRegex(fixture.model.AlarmError, 'queue_mode_lease'):
+            await self.delivery.play()
+        self.assertEqual(self.count('alarm_start'), 0)
 
     async def test_connection_replaced_under_same_entity_id_never_plays_wrong_song(self):
         self.server_id = 'another-server'

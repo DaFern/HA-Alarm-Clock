@@ -6,7 +6,8 @@ test API. Ordinary tone/voice alarms do not require this package.
 
 ### Issue #4 queue-preservation extension
 
-Current templates advertise protocol 2 plus `preserve_queue` and `restore_playback`. Scheduled alarms
+Current templates advertise protocol 2 plus `preserve_queue`, `restore_playback`
+and `queue_mode_lease`. Scheduled alarms
 and confirmed saved-alarm Tests can append/start an alarm item on a nonempty or
 playing queue, without discarding existing tracks. Only the alarm item is removed
 after an owned Snooze/Dismiss, and the interrupted playing item is resumed at its
@@ -19,9 +20,16 @@ Enqueue attempts are consumed before preparation/dispatch so an uncertain respon
 cannot duplicate the alarm song. Message repetition is opt-in per snooze wake-up;
 natural song loops never rearm speech.
 
+The scheduled-alarm path snapshots the queue's Repeat mode and Autoplay override,
+temporarily disables enabled modes for the owned alarm segment, then restores the
+saved preferences on Snooze/Stop or guarded cleanup. Restoration is conditional:
+a queue mode changed away from the temporary value is left alone. HA persists the
+snapshot so it can request safe restoration after companion state loss. The older
+experimental one-shot test still requires Repeat/Autoplay off.
+
 The older protocol-1 experimental random-song test remains idle/empty-only;
-it is not the saved-alarm Test. Grouping, Repeat, Autoplay and ambient overlays
-remain unsupported. The old `7aab695...` deployment lacks this capability.
+it is not the saved-alarm Test. Grouping and ambient overlays remain unsupported.
+The old `7aab695...` deployment lacks this capability.
 Publish/install a regenerated companion before deploying integration 0.7.0b6.
 Empty, stopped-nonempty and active queues still require live speaker acceptance;
 offline command tests are not an audible result.
@@ -106,8 +114,9 @@ backup, not opening its newer database with an older binary.
 - The image has **not been built here** and an authenticated MA server has not
   been exercised with protocol 2. Passing fake-controller tests and real FFmpeg
   helper tests does not prove server startup, Supervisor install or audibility.
-- Music alarms require an idle, empty, ungrouped queue with Repeat, Autoplay and
-  ambient overlay off. Existing listening is never replaced automatically.
+- Music alarms preserve existing queue items and listening, and temporarily
+  suspend/restore Repeat and Autoplay when the companion advertises
+  `queue_mode_lease`. Grouped queues and ambient overlays remain unsupported.
 - Voice delay is 0–120 seconds of music, after message/TTS preparation. The song
   is the primary stream: a short song can end before delayed speech completes.
 - Track repeats are polled, not gapless. Snooze begins the song again and never

@@ -30,12 +30,15 @@ same-ring retries and HA reload/restart do not rearm it. The same setting applie
 to confirmed saved-alarm Tests and nonmusic spoken alarms.
 Restored music is not controlled by the sleep entity. Optional turn-sleep-switch-
 off-on-dismissal behavior is retained; users can add their own music automations.
-Repeat, Autoplay, grouping and ambient overlays still block playback.
+Scheduled alarms temporarily suspend queue Repeat and Autoplay while the alarm
+owns playback, then restore the saved settings if they are still at the temporary
+values. Grouped players and ambient overlays still block playback.
 Failures appear beside the alarm under **Playback failed — details**.
 
-The previous deployed companion does not implement `restore_playback`. Upgrade
-the companion first; the integration rejects old companions rather than silently
-using incompatible queue behavior. Physical queue-state acceptance remains pending.
+The previously deployed companion does not implement `queue_mode_lease`. Upgrade
+the companion before expecting alarms to work with Repeat or Autoplay enabled; the
+integration rejects old companions rather than changing queue settings without
+restore support. Physical queue-state acceptance remains pending.
 The sections below include older deployed/test history.
 
 ## Song picker and optional lock-screen controls (phone acceptance pending)
@@ -215,8 +218,10 @@ It has a separate app identity/data directory and an exact upstream image digest
 with hash-guarded source patching at build time and no startup Git installation.
 Disable Supervisor automatic updates when installing it; this cannot be enforced
 by its manifest. The older deployment rejected busy/nonempty queues; current
-scheduled-alarm templates preserve them as described above. Grouped queues,
-Repeat, Autoplay and ambient overlay are still rejected rather than changed.
+scheduled-alarm templates preserve them as described above. The new
+`queue_mode_lease` capability temporarily suspends and conditionally restores
+Repeat and Autoplay for scheduled alarms. The older experimental test remains
+strict; grouped queues and ambient overlays are still rejected.
 
 The user confirmed a full-song playthrough, simultaneous briefing, Dismiss and
 Snooze on the earlier DEV prototype. **The intermittent Echo song/chapter restart

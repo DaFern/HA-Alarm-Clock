@@ -3,7 +3,61 @@
     async def alarm_capabilities(self, queue_id: str) -> dict[str, Any]:
         """Versioned scheduled-alarm contract; legacy test APIs are not sufficient."""
         result = await self.briefing_test_capabilities(queue_id, preserve_queue=True)
-        return {**result, "protocol": 2, "features": ["selected_track", "speech_delay", "music_only", "volume_ramp", "preserve_queue", "restore_playback"]}
+        queue_data = self._queue_data[queue_id]
+        queue = queue_data.queue
+        repeat_mode = getattr(queue.repeat_mode, "value", queue.repeat_mode)
+        return {
+            **result,
+            "protocol": 2,
+            "features": [
+                "selected_track", "speech_delay", "music_only", "volume_ramp",
+                "preserve_queue", "restore_playback", "queue_mode_lease",
+            ],
+            "queue_modes": {
+                "repeat_mode": repeat_mode,
+                "autoplay_override": queue_data.autoplay_override,
+                "autoplay_enabled": queue.autoplay_enabled,
+            },
+        }
+
+    def _valid_alarm_queue_modes(self, queue_modes: Any) -> bool:
+        """Validate the read-only queue preferences HA persisted before dispatch."""
+        if not isinstance(queue_modes, dict):
+            return False
+        repeat_modes = {
+            getattr(mode, "value", mode) for mode in RepeatMode
+        }
+        return (
+            queue_modes.get("repeat_mode") in repeat_modes
+            and (queue_modes.get("autoplay_override") is None
+                 or type(queue_modes.get("autoplay_override")) is bool)
+            and type(queue_modes.get("autoplay_enabled")) is bool
+        )
+
+    async def _restore_alarm_queue_modes(self, queue_id: str, queue_modes: Any) -> bool:
+        """Restore only settings still at the temporary alarm overrides."""
+        if not self._valid_alarm_queue_modes(queue_modes):
+            return False
+        queue_data = self._queue_data.get(queue_id)
+        if queue_data is None:
+            return False
+        queue = queue_data.queue
+        restored = False
+        off_value = getattr(RepeatMode.OFF, "value", RepeatMode.OFF)
+        if (queue_modes["repeat_mode"] != off_value
+                and getattr(queue.repeat_mode, "value", queue.repeat_mode) == off_value):
+            repeat_mode = next(
+                mode for mode in RepeatMode
+                if getattr(mode, "value", mode) == queue_modes["repeat_mode"]
+            )
+            await self.set_repeat(queue_id, repeat_mode)
+            restored = True
+        if queue_modes["autoplay_enabled"] and not queue.autoplay_enabled:
+            queue_data.autoplay_override = queue_modes["autoplay_override"]
+            self._resolve_default_toggles(queue_data)
+            self.signal_update(queue_id)
+            restored = True
+        return restored
 
     @api_command("player_queues/alarm_start", required_scope=Scope.QUEUES_CONTROL)
     @handle_play_action
@@ -11,12 +65,18 @@
         self, queue_id: str, run_id: str, track_uri: str, message: str = "",
         tts_engine: str = "", language: str | None = None, voice: str | None = None,
         music_gain: float = 0.25, speech_delay: int = 0, volume_level: int = 20,
+        queue_modes: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Start a selected library song, optionally with one finite delayed briefing."""
         self._check_player_permission(queue_id)
         capability = await self.alarm_capabilities(queue_id)
         if not capability["ready"]:
             raise InvalidDataError("; ".join(capability["reasons"]))
+        if queue_modes is None:
+            queue_modes = capability["queue_modes"]
+        if (not self._valid_alarm_queue_modes(queue_modes)
+                or queue_modes != capability["queue_modes"]):
+            raise InvalidDataError("The development queue settings changed; retry the alarm")
         if (not isinstance(track_uri, str) or not track_uri.startswith("library://track/")
                 or not track_uri.removeprefix("library://track/").isascii()
                 or not track_uri.removeprefix("library://track/").isdigit()):
@@ -37,6 +97,7 @@
         # Reserve before preparation/enqueue, including failures and lost responses.
         mixer.reserve_alarm_start(queue_id, run_id)
         prepared = None
+        dispatch_started = False
         if message:
             prepared = await prepare_briefing(
                 self.mass, run_id, message, tts_engine, language, voice, levels=levels)
@@ -61,9 +122,18 @@
             owner = {"run_id": run_id, "item_id": item.queue_item_id, "preserve_queue": True,
                      "music_gain": music_gain, "volume_level": volume_level,
                      "original_volume": player.state.volume_level,
+                     "queue_modes": dict(queue_modes),
                      "resume_item_id": prior.queue_item_id if resume and prior is not None else None,
                      "resume_position": max(0, int(queue.corrected_elapsed_time)) if resume else 0}
-            mixer.alarm_segments[(queue_id, run_id)] = dict(owner)
+            key = (queue_id, run_id)
+            mixer.alarm_segments[key] = owner
+            # Keep the user's effective queue preferences normally; suspend them only
+            # while this guarded alarm segment owns playback.
+            if queue.repeat_mode != RepeatMode.OFF:
+                await self.set_repeat(queue_id, RepeatMode.OFF)
+            if queue.autoplay_enabled:
+                self.set_autoplay(queue_id, False)
+            dispatch_started = True
             self.update_items(queue_id, [*self._queue_data[queue_id].items, item])
             # Music-only starts also consume their id before dispatch. Failed or
             # uncertain starts must never be blindly submitted a second time.
@@ -74,6 +144,9 @@
             return {"protocol": 2, "status": "playing"}
         except BaseException:
             mixer.cancel(queue_id, run_id)
+            if not dispatch_started:
+                await self._restore_alarm_queue_modes(queue_id, queue_modes)
+                mixer.alarm_segments.pop((queue_id, run_id), None)
             raise
         finally:
             if prepared is not None:
@@ -83,10 +156,11 @@
     @handle_play_action
     async def alarm_control(
         self, queue_id: str, run_id: str, action: str, volume_level: int | None = None,
+        queue_modes: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Release one alarm segment, restoring only the music it interrupted."""
         self._check_player_permission(queue_id)
-        if action not in ("status", "snooze", "restart", "stop"):
+        if action not in ("status", "snooze", "restart", "stop", "restore_modes"):
             raise InvalidDataError("Unknown alarm action")
         if volume_level is not None:
             if action != "restart" or type(volume_level) is not int or not 1 <= volume_level <= 100:
@@ -95,6 +169,14 @@
         data = self._queue_data[queue_id]
         player = self.mass.players.get_player(queue_id)
         key = (queue_id, run_id)
+        if action == "restore_modes":
+            owner = mixer.owner(queue_id, run_id, data.session_id)
+            if owner is not None:
+                return {"protocol": 2, "owned": True, "restored_modes": False}
+            segment = mixer.alarm_segments.get(key)
+            saved_modes = segment.get("queue_modes") if segment else queue_modes
+            restored = await self._restore_alarm_queue_modes(queue_id, saved_modes)
+            return {"protocol": 2, "owned": False, "restored_modes": restored}
         if action in ("snooze", "stop") and key in mixer.alarm_releases:
             # A lost response must not stop the restored music or restore twice.
             return dict(mixer.alarm_releases[key])
@@ -127,10 +209,19 @@
                         data.queue.index_in_buffer = next(
                             (i for i, item in enumerate(items) if item.queue_item_id == buffered.queue_item_id), None)
                     self.update_items(queue_id, items)
+                await self._restore_alarm_queue_modes(
+                    queue_id, segment.get("queue_modes", queue_modes)
+                )
                 mixer.alarm_segments.pop(key, None)
                 result = {"protocol": 2, "owned": False, "released": True}
                 mixer.alarm_releases[key] = result
                 return dict(result)
+            if action in ("snooze", "stop") and queue_modes is not None:
+                restored = await self._restore_alarm_queue_modes(queue_id, queue_modes)
+                return {
+                    "protocol": 2, "owned": False, "released": True,
+                    "restored_modes": restored,
+                }
             return {"protocol": 2, "owned": False}
         if action == "restart":
             # Natural song loops only. Snooze wakes use a fresh alarm_start and
@@ -188,6 +279,7 @@
                     and prior_id and any(item.queue_item_id == prior_id for item in data.items)):
                 await self._play_index(queue_id, prior_id, owner["resume_position"], False)
                 result.update(state="playing", restored=True)
+            await self._restore_alarm_queue_modes(queue_id, owner.get("queue_modes"))
         except BaseException:
             # Record uncertainty before returning/raising. Never retry a restore
             # dispatch after it may have reached the player.

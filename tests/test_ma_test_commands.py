@@ -17,6 +17,12 @@ class State(StrEnum):
     PAUSED = 'paused'
 
 
+class RepeatMode(StrEnum):
+    OFF = 'off'
+    ONE = 'one'
+    ALL = 'all'
+
+
 class MACommandTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.mixer = fixture.adapter.OneShotMixer()
@@ -50,7 +56,7 @@ class MACommandTests(unittest.IsolatedAsyncioTestCase):
         namespace = dict(api_command=api_command, handle_play_action=handle_play_action, Any=object,
             get_tts_engines=lambda mass: self.get_engines(mass),
             Scope=types.SimpleNamespace(QUEUES_CONTROL='control'), PlaybackState=State,
-            PlayerType=types.SimpleNamespace(GROUP='group'), RepeatMode=types.SimpleNamespace(OFF='off'),
+            PlayerType=types.SimpleNamespace(GROUP='group'), RepeatMode=RepeatMode,
             MediaType=types.SimpleNamespace(TRACK='track'), QueueOption=types.SimpleNamespace(ADD='add'),
             PlayerUnavailableError=ValueError, InvalidDataError=ValueError,
             prepare_briefing=prepare, MixLevels=fixture.adapter.MixLevels,
@@ -63,7 +69,8 @@ class MACommandTests(unittest.IsolatedAsyncioTestCase):
                                             autoplay_enabled=False, overlay_enabled=False,
                                             current_item=None, current_index=None, index_in_buffer=None,
                                             corrected_elapsed_time=0, next_item=None)
-        self.data = types.SimpleNamespace(queue=self.queue, items=[], session_id=None)
+        self.data = types.SimpleNamespace(queue=self.queue, items=[], session_id=None,
+                                           autoplay_override=None)
         self.player = types.SimpleNamespace(state=types.SimpleNamespace(
             type='player', active_group=None, synced_to=None, group_members=[],
             playback_state=State.IDLE, active_source=None, volume_level=23))
@@ -78,6 +85,19 @@ class MACommandTests(unittest.IsolatedAsyncioTestCase):
         self.host.mass.music = types.SimpleNamespace(get_item_by_uri=get_track)
         self.host._queue_data = {'Kitchen': self.data}
         self.host.update_items = lambda queue, items: setattr(self.data, 'items', items)
+        async def set_repeat(queue, repeat_mode):
+            self.queue.repeat_mode = repeat_mode
+            self.calls.append(('repeat', repeat_mode))
+        def set_autoplay(queue, enabled):
+            self.data.autoplay_override = enabled
+            self.queue.autoplay_enabled = enabled
+            self.calls.append(('autoplay', enabled))
+        self.host.set_repeat = set_repeat
+        self.host.set_autoplay = set_autoplay
+        self.host._resolve_default_toggles = lambda data: setattr(
+            data.queue, 'autoplay_enabled',
+            True if data.autoplay_override is None else data.autoplay_override)
+        self.host.signal_update = lambda queue: self.calls.append(('signal_update', queue))
         self.host.get_item = lambda queue, index: self.data.items[index] if isinstance(index, int) and 0 <= index < len(self.data.items) else None
         self.host.get = lambda _: self.queue
         def permission(_):
@@ -150,6 +170,20 @@ class MACommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.calls)
         self.assertEqual(self.data.items, [])
 
+    async def test_alarm_capabilities_allow_repeat_and_autoplay_but_test_capabilities_do_not(self):
+        self.queue.repeat_mode = RepeatMode.ALL
+        self.queue.autoplay_enabled = True
+        ordinary = await self.host.briefing_test_capabilities('Kitchen')
+        self.assertFalse(ordinary['ready'])
+        alarm = await self.host.alarm_capabilities('Kitchen')
+        self.assertTrue(alarm['ready'])
+        self.assertEqual(alarm['queue_modes'], {
+            'repeat_mode': 'all', 'autoplay_override': None, 'autoplay_enabled': True,
+        })
+        self.assertEqual(self.queue.repeat_mode, RepeatMode.ALL)
+        self.assertTrue(self.queue.autoplay_enabled)
+        self.assertFalse(self.calls)
+
     async def test_external_home_assistant_with_same_entity_id_is_not_substituted(self):
         self.get_engines.return_value[0].provider.get_setup_value = lambda key: 'https://another-ha.invalid'
         result = await self.host.briefing_test_capabilities('Kitchen')
@@ -188,6 +222,64 @@ class MACommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(owner['item_id'], 'test-item')
         self.assertNotIn('message', owner)
         self.assertNotIn('source', owner)
+
+    async def alarm_start(self, run='alarm-run', queue_modes=None):
+        return await self.host.alarm_start(
+            queue_id='Kitchen', run_id=run, track_uri='library://track/642',
+            queue_modes=queue_modes or {
+                'repeat_mode': 'all', 'autoplay_override': None, 'autoplay_enabled': True,
+            },
+        )
+
+    async def test_alarm_temporarily_suspends_then_restores_repeat_and_autoplay(self):
+        self.queue.repeat_mode = RepeatMode.ALL
+        self.queue.autoplay_enabled = True
+        self.assertEqual((await self.alarm_start())['status'], 'playing')
+        self.assertEqual(self.queue.repeat_mode, RepeatMode.OFF)
+        self.assertFalse(self.queue.autoplay_enabled)
+        self.assertFalse(self.data.autoplay_override)
+        result = await self.host.alarm_control('Kitchen', 'alarm-run', 'stop')
+        self.assertTrue(result['owned'])
+        self.assertEqual(self.queue.repeat_mode, RepeatMode.ALL)
+        self.assertTrue(self.queue.autoplay_enabled)
+        self.assertIsNone(self.data.autoplay_override)
+
+    async def test_alarm_restores_queue_modes_after_snooze(self):
+        self.queue.repeat_mode = RepeatMode.ONE
+        self.queue.autoplay_enabled = True
+        self.data.autoplay_override = True
+        await self.alarm_start(queue_modes={
+            'repeat_mode': 'one', 'autoplay_override': True, 'autoplay_enabled': True,
+        })
+        result = await self.host.alarm_control('Kitchen', 'alarm-run', 'snooze')
+        self.assertTrue(result['owned'])
+        self.assertEqual(self.queue.repeat_mode, RepeatMode.ONE)
+        self.assertTrue(self.queue.autoplay_enabled)
+        self.assertTrue(self.data.autoplay_override)
+
+    async def test_alarm_does_not_overwrite_queue_modes_changed_by_user(self):
+        self.queue.repeat_mode = RepeatMode.ALL
+        self.queue.autoplay_enabled = True
+        await self.alarm_start()
+        self.queue.repeat_mode = RepeatMode.ONE
+        self.data.autoplay_override = True
+        self.queue.autoplay_enabled = True
+        await self.host.alarm_control('Kitchen', 'alarm-run', 'stop')
+        self.assertEqual(self.queue.repeat_mode, RepeatMode.ONE)
+        self.assertTrue(self.queue.autoplay_enabled)
+        self.assertTrue(self.data.autoplay_override)
+
+    async def test_alarm_can_restore_modes_from_ha_snapshot_after_companion_state_loss(self):
+        self.queue.repeat_mode = RepeatMode.OFF
+        self.queue.autoplay_enabled = False
+        modes = {'repeat_mode': 'all', 'autoplay_override': None, 'autoplay_enabled': True}
+        result = await self.host.alarm_control(
+            'Kitchen', 'old-run', 'stop', queue_modes=modes,
+        )
+        self.assertTrue(result['released'])
+        self.assertEqual(self.queue.repeat_mode, RepeatMode.ALL)
+        self.assertTrue(self.queue.autoplay_enabled)
+        self.assertIsNone(self.data.autoplay_override)
 
     async def test_snooze_and_restart_keep_song_and_do_not_prepare_speech_twice(self):
         await self.start()
