@@ -446,7 +446,11 @@ class HouseholdAlarmsCard extends HTMLElement {
   }
 
   _nextOccurrence(alarm, now = new Date()) {
-    if (!alarm.enabled || !alarm.next) return "Not scheduled";
+    if (!alarm.enabled) return "Not scheduled";
+    if (alarm.next_status === "calendar_pending") return "Checking calendar…";
+    if (alarm.next_status === "calendar_unavailable") return "Cannot check calendar";
+    if (alarm.next_status === "no_match") return "No match in next 15 days";
+    if (!alarm.next) return "Not scheduled";
     const next = new Date(alarm.next);
     if (!Number.isFinite(next.getTime())) return "Not scheduled";
     const timeZone = this._hass?.config?.time_zone || "UTC";

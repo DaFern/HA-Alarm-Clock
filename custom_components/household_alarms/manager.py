@@ -46,6 +46,8 @@ class AlarmManager:
         self.owners = {}
         self.calendar_cache = {}
         self.calendar_event_cache = {}
+        self.next_calendar_cache = {}
+        self.next_calendar_tasks = {}
         self.warnings = {}
         self.closed = False
         self.ticking = False
@@ -124,6 +126,7 @@ class AlarmManager:
     def snapshot(self):
         result = []
         now = dt_util.now()
+        self._refresh_next_calendars(now)
         for alarm in self.alarms.values():
             run = self.runs.get(alarm["id"])
             warning = ""
@@ -133,7 +136,8 @@ class AlarmManager:
                 if alarm["assistant_id"] or alarm["briefing_enabled"] or alarm["tone"] == "none":
                     warning = str(err)
             public_run = {key: deepcopy(value) for key, value in run.items() if not key.startswith("phone_")} if run else None
-            result.append({**deepcopy(alarm), "run": public_run, "next": self._next(alarm, now),
+            next_due, next_status = self._next_details(alarm, now)
+            result.append({**deepcopy(alarm), "run": public_run, "next": next_due, "next_status": next_status,
                            "assistant_warning": warning})
         return {
             "revision": self.revision, "alarms": result, "defaults": deepcopy(DEFAULTS),
@@ -146,21 +150,103 @@ class AlarmManager:
         }
 
     def _next(self, alarm, now):
+        return self._next_details(alarm, now)[0]
+
+    @staticmethod
+    def _needs_next_calendar(alarm):
+        return bool(alarm["calendar"]) and (
+            alarm["mode"] in ("school", "non_school")
+            or alarm["mode"] == "weekdays" and alarm["calendar_rule"] != "none")
+
+    def _refresh_next_calendars(self, now):
+        """Fetch display forecasts separately; never hold up scheduled delivery."""
+        if self.closed:
+            return
+        entities = {alarm["calendar"] for alarm in self.alarms.values()
+                    if alarm["enabled"] and self._needs_next_calendar(alarm)}
+        keys = {(entity, now.date().isoformat(), str(now.tzinfo)) for entity in entities}
+        self.next_calendar_cache = {key: value for key, value in self.next_calendar_cache.items() if key in keys}
+        for key in keys:
+            cached = self.next_calendar_cache.get(key)
+            if (cached and 0 <= now.timestamp() - cached[0] < 300) or key in self.next_calendar_tasks:
+                continue
+            self._spawn(self.next_calendar_tasks, key, self._fetch_next_calendar(key, now))
+
+    async def _fetch_next_calendar(self, key, now):
+        entity = key[0]
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        days = [start + timedelta(days=offset) for offset in range(16)]
+        by_day = None
+        try:
+            state = self.hass.states.get(entity)
+            if not state or state.state in ("unknown", "unavailable"):
+                raise AlarmError("Calendar is unavailable")
+            async with asyncio.timeout(8):
+                response = await self.hass.services.async_call(
+                    "calendar", "get_events", {"entity_id": entity,
+                     "start_date_time": start.isoformat(), "end_date_time": days[-1].isoformat()},
+                    blocking=True, return_response=True, context=self.context)
+            events = response[entity]["events"]
+            if not isinstance(events, list):
+                raise AlarmError("Calendar response was invalid")
+            by_day = {day.date().isoformat(): [] for day in days[:-1]}
+            for event in events:
+                # All-day ends are exclusive; timed events may span local dates.
+                bounds = []
+                for field in ("start", "end"):
+                    value = event[field]
+                    if isinstance(value, dict):
+                        value = value.get("dateTime", value.get("date"))
+                    bound = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                    bounds.append(bound if bound.tzinfo else bound.replace(tzinfo=now.tzinfo))
+                if bounds[1].timestamp() <= bounds[0].timestamp():
+                    raise AlarmError("Calendar event interval was invalid")
+                for day, end in zip(days, days[1:]):
+                    if bounds[0].timestamp() < end.timestamp() and bounds[1].timestamp() > day.timestamp():
+                        by_day[day.date().isoformat()].append(event)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            by_day = None
+        if not self.closed:
+            self.next_calendar_cache[key] = (dt_util.now().timestamp(), by_day)
+            self.changed()
+
+    def _next_details(self, alarm, now):
         if not alarm["enabled"]:
-            return None
+            return None, "disabled"
         run = self.runs.get(alarm["id"], {})
         if run.get("status") in ACTIVE:
-            return run["next_ring"]
+            return run["next_ring"], "active"
         for offset in range(15):
             day = now.date() + timedelta(days=offset)
-            # Future school days are provisional until the calendar is fetched.
-            cached = self.calendar_cache.get((alarm["calendar"], day.isoformat()))
-            school = cached[1] if cached else day.weekday() < 5
-            if matches(alarm, day, school):
-                due = local_occurrence(day, alarm["time"], now.tzinfo)
-                if due and due.timestamp() > now.timestamp() and run.get("date") != day.isoformat():
-                    return due.isoformat()
-        return None
+            due = local_occurrence(day, alarm["time"], now.tzinfo)
+            if not due or due.timestamp() <= now.timestamp() or run.get("date") == day.isoformat():
+                continue
+            school, calendar_match = day.weekday() < 5, None
+            # Unselected days and explicitly unconditional days need no lookup.
+            if alarm["mode"] == "weekdays":
+                if day.weekday() not in alarm["weekdays"]:
+                    continue
+                needs_calendar = self._needs_next_calendar(alarm) and (
+                    matches(alarm, day, school, True) != matches(alarm, day, school, False))
+            else:
+                needs_calendar = self._needs_next_calendar(alarm)
+            if needs_calendar:
+                key = (alarm["calendar"], now.date().isoformat(), str(now.tzinfo))
+                cached = self.next_calendar_cache.get(key)
+                if not cached or not 0 <= now.timestamp() - cached[0] < 300:
+                    return None, "calendar_pending"
+                state = self.hass.states.get(alarm["calendar"])
+                if cached[1] is None or not state or state.state in ("unknown", "unavailable"):
+                    return None, "calendar_unavailable"
+                events = cached[1][day.isoformat()]
+                school = is_school_day(day, events)
+                calendar_match = any(include_event_title(str(event.get("summary", "")),
+                                                        alarm["calendar_filters"]) for event in events)
+            if matches(alarm, day, school, calendar_match):
+                return due.isoformat(), "scheduled"
+        return None, "no_match"
 
     async def async_put(self, config, expected_revision, alarm_id=None):
         """Compare-and-save settings; a stale editor never overwrites newer work."""
@@ -390,6 +476,7 @@ class AlarmManager:
             self.changed()
         finally:
             self.ticking = False
+            self._refresh_next_calendars(dt_util.now())
 
     async def _tick(self, now):
         before_warnings = dict(self.warnings)
@@ -865,7 +952,8 @@ class AlarmManager:
         self.closed = True
         await self.phone_notifications.async_shutdown()
         await self.music_tests.async_shutdown()
-        tasks = [*self.tasks.values(), *self.alert_tasks.values(), *self.preview_tasks]
+        tasks = [*self.tasks.values(), *self.alert_tasks.values(), *self.preview_tasks,
+                 *self.next_calendar_tasks.values()]
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)

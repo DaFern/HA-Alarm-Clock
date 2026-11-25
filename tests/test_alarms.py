@@ -427,9 +427,11 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.hass.states.set("media_player.lottie", volume_level=.4)
 
     async def asyncTearDown(self):
-        for task in [*self.manager.tasks.values(), *self.manager.alert_tasks.values()]:
+        for task in [*self.manager.tasks.values(), *self.manager.alert_tasks.values(),
+                     *self.manager.next_calendar_tasks.values()]:
             task.cancel()
-        await asyncio.gather(*self.manager.tasks.values(), *self.manager.alert_tasks.values(), return_exceptions=True)
+        await asyncio.gather(*self.manager.tasks.values(), *self.manager.alert_tasks.values(),
+                             *self.manager.next_calendar_tasks.values(), return_exceptions=True)
         self.clock.stop()
 
     async def create(self, **overrides):
@@ -877,6 +879,121 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.manager._deliver.assert_not_called()
         self.assertNotIn(alarm_id, self.manager.runs)
         self.assertNotIn(f"calendar:{alarm_id}", self.manager.warnings)
+
+    async def forecast(self, events, **settings):
+        alarm_id = await self.create(enabled=True, time="07:10", calendar="calendar.work",
+            calendar_rule="allow", weekdays=list(range(7)), **settings)
+        self.hass.states.set("calendar.work", "off")
+        async def respond(domain, service, data):
+            return {data["entity_id"]: {"events": events}}
+        self.hass.services.handler = respond
+        self.manager.snapshot()
+        await asyncio.gather(*self.manager.next_calendar_tasks.values())
+        return self.manager.alarms[alarm_id]
+
+    async def test_next_only_matching_holiday_not_tomorrow_and_filters_titles(self):
+        alarm = await self.forecast([
+            {"summary": "Meeting", "start": "2026-11-10", "end": "2026-11-11"},
+            {"summary": "WORK HOLIDAY", "start": "2026-11-12", "end": "2026-11-13"}],
+            calendar_filters="work holiday")
+        self.assertEqual(self.manager._next_details(alarm, self.now),
+            ("2026-11-12T07:10:00+00:00", "scheduled"))
+        self.assertEqual(len(self.hass.services.calls), 1)
+        self.assertEqual(self.hass.services.calls[0][2]["end_date_time"], "2026-11-24T00:00:00+00:00")
+        self.assertEqual(self.manager.runs, {})
+
+    async def test_next_empty_calendar_reports_bounded_no_match(self):
+        alarm = await self.forecast([])
+        self.assertEqual(self.manager._next_details(alarm, self.now), (None, "no_match"))
+
+    async def test_next_block_rule_skips_multiday_holiday_exclusive_end(self):
+        alarm = await self.forecast([
+            {"summary": "Holiday", "start": "2026-11-09", "end": "2026-11-12"}])
+        alarm["calendar_rule"] = "block"
+        self.assertEqual(self.manager._next(alarm, self.now), "2026-11-12T07:10:00+00:00")
+
+    async def test_next_custom_match_days_allow_weekends_without_events(self):
+        alarm = await self.forecast([], calendar_days_custom=True, calendar_match_days=[0, 1, 2, 3, 4])
+        self.assertEqual(self.manager._next(alarm, self.now), "2026-11-14T07:10:00+00:00")
+
+    async def test_next_pending_and_failed_calendar_never_claim_a_date(self):
+        alarm_id = await self.create(enabled=True, calendar="calendar.work", calendar_rule="allow")
+        alarm = self.manager.alarms[alarm_id]
+        self.assertEqual(self.manager._next_details(alarm, self.now), (None, "calendar_pending"))
+        self.manager.snapshot()
+        await asyncio.gather(*self.manager.next_calendar_tasks.values())
+        self.assertEqual(self.manager._next_details(alarm, self.now), (None, "calendar_unavailable"))
+        self.hass.states.set("calendar.work", "off")
+        self.now += timedelta(minutes=6)
+        self.assertEqual(self.manager._next_details(alarm, self.now), (None, "calendar_pending"))
+        self.manager.snapshot()
+        await asyncio.gather(*self.manager.next_calendar_tasks.values())
+        self.assertEqual(self.manager._next_details(alarm, self.now), (None, "no_match"))
+
+    async def test_next_service_error_and_malformed_events_are_unavailable(self):
+        alarm = await self.forecast([])
+        for result in (HAError("offline"), {"summary": "Holiday"}, {"start": "bad", "end": "bad"}):
+            async def respond(*args):
+                if isinstance(result, Exception):
+                    raise result
+                return {"calendar.work": {"events": [result]}}
+            self.hass.services.handler = respond
+            self.now += timedelta(minutes=6)
+            self.manager.snapshot()
+            await asyncio.gather(*self.manager.next_calendar_tasks.values())
+            self.assertEqual(self.manager._next_details(alarm, self.now), (None, "calendar_unavailable"))
+
+    async def test_next_cache_shared_but_filters_and_edits_are_independent(self):
+        alarm = await self.forecast([
+            {"summary": "Holiday", "start": "2026-11-10", "end": "2026-11-11"}])
+        other_id = await self.create(enabled=True, calendar="calendar.work", calendar_rule="allow",
+            calendar_filters="Dentist")
+        other = self.manager.alarms[other_id]
+        self.manager.snapshot()
+        self.assertEqual(len(self.hass.services.calls), 1)
+        self.assertIsNotNone(self.manager._next(alarm, self.now))
+        self.assertEqual(self.manager._next_details(other, self.now), (None, "no_match"))
+        other["calendar_filters"] = "HOLIDAY"
+        self.assertEqual(self.manager._next(other, self.now), "2026-11-10T07:00:00+00:00")
+
+    async def test_next_timed_overnight_events_use_local_dates(self):
+        self.now = datetime(2026, 7, 1, 8, tzinfo=ZoneInfo("Europe/London"))
+        alarm = await self.forecast([
+            {"summary": "Holiday", "start": "2026-07-01T23:30:00Z", "end": "2026-07-02T23:00:00Z"}])
+        self.assertEqual(self.manager._next(alarm, self.now), "2026-07-02T07:10:00+01:00")
+        self.now += timedelta(days=1)
+        self.assertEqual(self.manager._next_details(alarm, self.now), (None, "calendar_pending"))
+
+    async def test_next_school_calendar_also_checks_future_closures(self):
+        alarm = await self.forecast([
+            {"summary": "School closed", "start": "2026-11-09", "end": "2026-11-12"}])
+        alarm["mode"] = "school"
+        self.assertEqual(self.manager._next(alarm, self.now), "2026-11-12T07:10:00+00:00")
+
+    async def test_next_disabled_and_active_alarms_preserve_existing_meaning(self):
+        alarm = await self.forecast([])
+        self.manager.runs[alarm["id"]] = run_at(self.now, status="snoozed")
+        self.assertEqual(self.manager._next_details(alarm, self.now), (self.now.isoformat(), "active"))
+        alarm["enabled"] = False
+        self.assertEqual(self.manager._next_details(alarm, self.now), (None, "disabled"))
+
+    async def test_next_slow_forecast_does_not_hold_up_scheduler_and_shutdown_cancels(self):
+        alarm_id = await self.create(enabled=True, calendar="calendar.work", calendar_rule="allow")
+        self.hass.states.set("calendar.work", "off")
+        blocked = asyncio.Event()
+        async def slow(*args):
+            await blocked.wait()
+        self.hass.services.handler = slow
+        self.manager.snapshot()
+        tasks = list(self.manager.next_calendar_tasks.values())
+        await asyncio.sleep(0)
+        self.manager._tick = AsyncMock()
+        await self.manager.async_tick()
+        self.manager._tick.assert_awaited_once()
+        self.assertFalse(tasks[0].done())
+        self.assertNotIn(alarm_id, self.manager.runs)
+        await self.manager.async_shutdown()
+        self.assertTrue(tasks[0].cancelled())
 
     async def test_settings_roundtrip(self):
         alarm_id = await self.create()

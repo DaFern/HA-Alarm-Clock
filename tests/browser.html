@@ -137,6 +137,10 @@
     test('disabled alarms are not scheduled even with a stale next value', nextText('2026-11-23T09:00:00Z','2026-11-19T09:00:00Z',false)==='Not scheduled');
     test('HA local dates handle UTC midnight and summer offset', nextText('2026-07-02T00:30:00Z','2026-07-01T23:30:00Z')==='Today at 1:30');
     test('tomorrow uses calendar dates across DST', nextText('2026-03-29T08:00:00Z','2026-03-28T09:00:00Z')==='Tomorrow at 9:00');
+    test('calendar forecast loading does not claim tomorrow', card._nextOccurrence({enabled:true,next_status:'calendar_pending',next:'2026-11-20T07:10:00Z'})==='Checking calendar…');
+    test('calendar forecast failure is not no schedule', card._nextOccurrence({enabled:true,next_status:'calendar_unavailable',next:null})==='Cannot check calendar');
+    test('empty calendar forecast describes its bounded range', card._nextOccurrence({enabled:true,next_status:'no_match',next:null})==='No match in next 15 days');
+    test('disabled calendar alarm remains not scheduled', card._nextOccurrence({enabled:false,next_status:'calendar_pending',next:null})==='Not scheduled');
     test("empty list renders", q("#list").textContent.includes("No alarms yet"));
     test('experimental panel removed and card load never plays', !q('[data-music-field="enabled"]') && !q('[data-action="music-start"]') && !calls.some((c) => c.type==='household_alarms/music_start'));
     await click("new");
