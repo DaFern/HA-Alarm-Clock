@@ -5,7 +5,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 import types
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import test_alarms as fixture
 
@@ -567,6 +567,185 @@ class ScheduledMusicTests(unittest.IsolatedAsyncioTestCase):
         await self.start()
         self.assertEqual(self.count('alarm_control', 'restart'), 1)
         self.assertEqual(self.count('alarm_start'), 1)
+
+    async def paused_delivery(self):
+        self.state = 'paused'
+        self.hass.states.set(self.alarm['speaker'], 'paused', volume_level=.2)
+        with patch.object(fixture.manager_module, 'AlarmMusic', return_value=self.delivery):
+            self.manager._spawn(self.manager.tasks, self.alarm['id'], self.manager._deliver(self.alarm['id']))
+            self.task = self.manager.tasks[self.alarm['id']]
+            await asyncio.wait_for(asyncio.shield(self.task), 1)
+
+    async def test_confirmed_owned_pause_dismisses_without_self_cancel_or_replay(self):
+        self.alarm['enabled'] = True
+        self.run.update(error='Previous warning', phone_token='previous-token')
+        self.hass.bus.async_fire = Mock()
+        await self.paused_delivery()
+        self.assertFalse(self.task.cancelled())
+        self.assertEqual(self.run['status'], 'dismissed')
+        self.assertEqual(self.manager.store.data['runs'][self.alarm['id']]['status'], 'dismissed')
+        self.assertEqual(self.run['error'], '')
+        self.assertFalse(self.run['music_blocked'])
+        self.assertIsNone(self.run['music_attempt'])
+        self.assertNotEqual(self.run['phone_token'], 'previous-token')
+        self.assertEqual(self.run['snoozes'], 0)
+        self.assertEqual(self.count('alarm_control', 'stop'), 1)
+        self.assertEqual(self.count('alarm_control', 'restart'), 0)
+        self.assertFalse(self.manager.owners)
+        self.hass.bus.async_fire.assert_any_call('household_alarms_dismiss',
+            {'alarm_id': self.alarm['id'], 'person': self.alarm['person']})
+        await self.manager._tick(datetime.now(timezone.utc))
+        self.assertEqual(self.count('alarm_start'), 1)
+
+    async def test_pause_dismissal_preserves_other_alarms_and_sleep_switch_preference(self):
+        other = fixture.model.validate(fixture.config(name='Other alarm'))
+        self.manager.alarms[other['id']] = other
+        other_run = fixture.run_at(datetime.now(timezone.utc))
+        self.manager.runs[other['id']] = other_run
+        self.alarm.update(bedtime_entity='input_boolean.bedtime', clear_sleep_on_dismiss=True)
+        self.hass.states.set('input_boolean.bedtime', 'on')
+        await self.paused_delivery()
+        self.assertEqual(other_run['status'], 'ringing')
+        self.assertIn(('input_boolean', 'turn_off', {'entity_id': 'input_boolean.bedtime'}),
+            [call[:3] for call in self.hass.services.calls])
+
+    async def test_pause_dismissal_does_not_touch_sleep_switch_by_default(self):
+        self.alarm['bedtime_entity'] = 'input_boolean.bedtime'
+        self.hass.states.set('input_boolean.bedtime', 'on')
+        await self.paused_delivery()
+        self.assertFalse(any(domain == 'input_boolean' for domain, *_ in self.hass.services.calls))
+
+    async def test_pause_dismissal_keeps_uncertain_cleanup_warning_without_retry(self):
+        self.stop_error = True
+        await self.paused_delivery()
+        self.assertEqual(self.run['status'], 'dismissed')
+        self.assertTrue(self.run['music_blocked'])
+        self.assertIsNotNone(self.run['music_attempt'])
+        self.assertIn('could not confirm the stop', self.run['error'])
+        self.assertEqual(self.count('alarm_control', 'stop'), 1)
+
+    async def test_paused_takeover_is_not_dismissal_and_does_not_stop_other_audio(self):
+        self.state, self.owned = 'paused', False
+        self.hass.states.set(self.alarm['speaker'], 'paused')
+        await self.delivery.play()
+        self.assertEqual(self.run['status'], 'ringing')
+        self.assertTrue(self.run['music_blocked'])
+        self.assertEqual(self.count('alarm_control', 'stop'), 0)
+
+    async def test_queue_pause_alone_never_dismisses_offline_idle_or_playing_speaker(self):
+        self.state = 'paused'
+        original = self.command
+        for speaker_state in ('unavailable', 'unknown', 'idle', 'playing', None):
+            with self.subTest(speaker_state=speaker_state):
+                self.owned = True
+                if speaker_state is None:
+                    self.hass.states.states.pop(self.alarm['speaker'], None)
+                else:
+                    self.hass.states.set(self.alarm['speaker'], speaker_state)
+                self.run.update(status='ringing', music_attempt='existing', music_blocked=False)
+                self.delivery = music.AlarmMusic(self.manager, self.alarm, self.run,
+                    resolver=self.resolver, server_resolver=self.server_resolver)
+                status_calls = 0
+                async def status_then_takeover(name, **kwargs):
+                    nonlocal status_calls
+                    result = await original(name, **kwargs)
+                    if name.endswith('alarm_control') and kwargs['action'] == 'status':
+                        status_calls += 1
+                        if status_calls > 1:
+                            self.owned = False
+                            result['owned'] = False
+                    return result
+                self.client.send_command = status_then_takeover
+                with patch.object(music.asyncio, 'sleep', new=AsyncMock()):
+                    await self.delivery.play()
+                self.assertEqual(self.run['status'], 'ringing')
+        self.assertEqual(self.count('alarm_control', 'stop'), 0)
+
+    async def test_pause_from_changed_music_connection_never_dismisses(self):
+        self.state = 'paused'
+        self.hass.states.set(self.alarm['speaker'], 'paused')
+        original = self.command
+        async def changed_connection(name, **kwargs):
+            result = await original(name, **kwargs)
+            if name.endswith('alarm_control') and kwargs['action'] == 'status':
+                self.server_id = 'replacement-server'
+                result['owned'] = sum(n.endswith('alarm_control') and a['action'] == 'status'
+                                      for n, a in self.calls) == 1
+                self.owned = result['owned']
+            return result
+        self.client.send_command = changed_connection
+        with patch.object(music.asyncio, 'sleep', new=AsyncMock()):
+            await self.delivery.play()
+        self.assertEqual(self.run['status'], 'ringing')
+        self.assertEqual(self.count('alarm_control', 'stop'), 0)
+
+    async def test_pause_dismiss_guard_rejects_stale_run_attempt_and_snooze(self):
+        self.run['music_attempt'] = 'current'
+        before = deepcopy(self.run)
+        for expected in ((dict(self.run), 'current'), (self.run, 'old')):
+            self.assertFalse(await self.manager.async_action(self.alarm['id'], 'dismiss',
+                expected_music_run=expected))
+            self.assertEqual(self.run, before)
+        self.run['status'] = 'snoozed'
+        self.assertFalse(await self.manager.async_action(self.alarm['id'], 'dismiss',
+            expected_music_run=(self.run, 'current')))
+        self.assertEqual(self.run['status'], 'snoozed')
+        self.assertFalse(self.calls)
+
+    async def test_pause_dismiss_guard_rechecks_snooze_after_waiting_for_lock(self):
+        self.run['music_attempt'] = 'current'
+        async with self.manager.lock:
+            action = asyncio.create_task(self.manager.async_action(self.alarm['id'], 'dismiss',
+                expected_music_run=(self.run, 'current')))
+            await asyncio.sleep(0)
+            self.run['status'] = 'snoozed'
+        self.assertFalse(await action)
+        self.assertEqual(self.run['status'], 'snoozed')
+        self.assertFalse(self.calls)
+
+    async def test_pause_dismiss_save_failure_never_dispatches_cleanup_or_sleep_change(self):
+        self.run['music_attempt'] = 'current'
+        self.alarm.update(bedtime_entity='input_boolean.bedtime', clear_sleep_on_dismiss=True)
+        before = deepcopy(self.run)
+        self.manager.store.fail = True
+        with self.assertRaises(OSError):
+            await self.manager.async_action(self.alarm['id'], 'dismiss',
+                expected_music_run=(self.run, 'current'))
+        self.assertEqual(self.manager.runs[self.alarm['id']], before)
+        self.assertFalse(self.calls)
+        self.assertFalse(self.hass.services.calls)
+
+    async def test_confirmed_pause_dismisses_before_volume_ramp_can_increase(self):
+        self.alarm['music_ramp_enabled'] = True
+        self.features.append('volume_ramp')
+        await self.paused_delivery()
+        self.assertEqual(self.run['status'], 'dismissed')
+        self.assertEqual(self.count('alarm_volume'), 0)
+
+    async def test_pause_dismissal_cleanup_rechecks_takeover_without_another_start(self):
+        original = self.command
+        async def takeover_during_stop(name, **kwargs):
+            if name.endswith('alarm_control') and kwargs['action'] == 'stop':
+                self.calls.append((name, deepcopy(kwargs)))
+                # The companion released only its stale item; new audio is untouched.
+                return {'protocol': 2, 'owned': False, 'released': True}
+            return await original(name, **kwargs)
+        self.client.send_command = takeover_during_stop
+        await self.paused_delivery()
+        self.assertEqual(self.run['status'], 'dismissed')
+        self.assertEqual(self.run['error'], '')
+        self.assertIsNone(self.run['music_attempt'])
+        self.assertEqual(self.count('alarm_control', 'stop'), 1)
+        self.assertEqual(self.count('alarm_start'), 1)
+
+    async def test_persisted_paused_alarm_dismisses_without_new_start_or_message(self):
+        self.run.update(music_attempt='previous-start', briefing_attempted=True)
+        self.delivery = music.AlarmMusic(self.manager, self.alarm, self.run,
+            resolver=self.resolver, server_resolver=self.server_resolver)
+        await self.paused_delivery()
+        self.assertEqual(self.run['status'], 'dismissed')
+        self.assertEqual(self.count('alarm_start'), 0)
+        self.assertEqual(self.count('alarm_control', 'stop'), 1)
 
     async def test_explicit_dismiss_and_sleep_in_cancel_and_stop_scheduled_playback(self):
         for action, status in (('dismiss', 'dismissed'), ('sleep_in', 'sleeping_in')):

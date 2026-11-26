@@ -285,6 +285,21 @@ class AlarmMusic:
                     await self._persist(music_blocked=True, error="Music playback changed elsewhere. Other audio was left alone; dismiss this alarm to finish.")
                     await self.restore_queue_modes()
                     return
+                speaker = self.manager.hass.states.get(self.alarm["speaker"])
+                if (state.get("state") == "paused" and speaker and speaker.state == "paused"
+                        and self.server_resolver(self.manager.hass, self.alarm["speaker"]) == self.alarm["music_server"]):
+                    # Pause is dismissal, not Snooze. Both MA ownership and HA's
+                    # speaker state must confirm it; idle/offline is not intent.
+                    dismissed = await self.manager.async_action(self.alarm["id"], "dismiss",
+                        expected_music_run=(self.run, self.attempt))
+                    if dismissed:
+                        # async_action already performed guarded stop/restoration.
+                        # Even an uncertain stop must not be blindly retried here.
+                        self.submitted = False
+                        if not self.run.get("music_attempt"):
+                            await self._persist(error="", music_blocked=False)
+                        self.manager.changed()
+                    return
                 warning = await ramp.tick()
                 if ramp.suspended and not self.run.get("music_ramp_suspended"):
                     await self._persist(music_ramp_suspended=True)

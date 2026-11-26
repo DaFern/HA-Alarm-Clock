@@ -320,10 +320,16 @@ class AlarmManager:
                 raise
         self.changed()
 
-    async def async_action(self, alarm_id, action, *, phone_token=None):
+    async def async_action(self, alarm_id, action, *, phone_token=None, expected_music_run=None):
         async with self.lock:
             alarm = self.alarms.get(alarm_id)
             run = self.runs.get(alarm_id)
+            if expected_music_run is not None:
+                expected_run, attempt = expected_music_run
+                if (action != "dismiss" or run is not expected_run or not alarm
+                        or run.get("status") != "ringing" or run.get("music_attempt") != attempt
+                        or not attempt or run.get("music_blocked")):
+                    return False
             if not alarm or not run or run["status"] not in ACTIVE:
                 raise AlarmError("This alarm is not active")
             if phone_token is not None:
@@ -353,6 +359,10 @@ class AlarmManager:
                 self.runs[alarm_id] = previous
                 raise
             task = self.tasks.get(alarm_id)
+            # A music worker may dismiss its own confirmed paused run. It must
+            # finish the normal guarded cleanup, not cancel/await itself.
+            if task is asyncio.current_task():
+                task = None
             if task:
                 task.cancel()
         if task:
@@ -374,6 +384,7 @@ class AlarmManager:
         self.hass.bus.async_fire(f"{DOMAIN}_{action}", {"alarm_id": alarm_id, "person": alarm["person"]})
         if action == "sleep_in":
             await self._notify(alarm, "Sleeping in", f"{alarm['person'] or alarm['name']} chose to sleep in.")
+        return True
 
     async def async_dismiss_person(self, person):
         """Automation hook: affect only the explicitly selected person's active runs."""
