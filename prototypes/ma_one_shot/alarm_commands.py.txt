@@ -12,6 +12,7 @@
             "features": [
                 "selected_track", "speech_delay", "music_only", "volume_ramp",
                 "preserve_queue", "restore_playback", "queue_mode_lease",
+                "external_command_dismissal",
             ],
             "queue_modes": {
                 "repeat_mode": repeat_mode,
@@ -180,6 +181,13 @@
         if action in ("snooze", "stop") and key in mixer.alarm_releases:
             # A lost response must not stop the restored music or restore twice.
             return dict(mixer.alarm_releases[key])
+        segment = mixer.alarm_segments.get(key)
+        if action in ("status", "restart") and segment and segment.get("command_pending") is True:
+            return {"protocol": 2, "owned": False, "command_pending": True}
+        if action in ("status", "restart") and segment and segment.get("dismiss_requested") is True:
+            # Explicit queue Stop/Pause clears ownership before HA can poll.
+            # Retain intent for this exact run, without claiming control of new audio.
+            return {"protocol": 2, "owned": False, "dismiss_requested": True}
         if action in ("snooze", "stop"):
             mixer.reject_run(queue_id, run_id)
         owner = mixer.owner(queue_id, run_id, data.session_id)
@@ -240,6 +248,39 @@
         elif action in ("snooze", "stop"):
             return await self._alarm_release(queue_id, run_id, owner)
         return {"protocol": 2, "owned": True, "state": data.queue.state.value}
+
+    def _capture_alarm_external_command(self, queue_id: str) -> Any:
+        """Capture only a current owned segment before an explicit queue command."""
+        mixer = self.mass.streams.audio.briefings
+        data = self._queue_data.get(queue_id)
+        player = self.mass.players.get_player(queue_id)
+        if data is None or player is None:
+            return None
+        current = data.queue.current_item
+        if current is None:
+            return None
+        for key, segment in mixer.alarm_segments.items():
+            if key[0] != queue_id:
+                continue
+            owner = mixer.owner(queue_id, key[1], data.session_id)
+            if (owner and current.queue_item_id == owner["item_id"]
+                    and player.state.active_source in (None, queue_id)
+                    and not player.state.active_group and not player.state.synced_to
+                    and player.state.type != PlayerType.GROUP
+                    and len(player.state.group_members or ()) <= 1):
+                segment["command_pending"] = True
+                return key, segment
+        return None
+
+    def _confirm_alarm_external_command(self, captured: Any, succeeded: bool) -> None:
+        """Called only after permission-checked Stop/Pause dispatch succeeds."""
+        if captured is None:
+            return
+        key, segment = captured
+        if self.mass.streams.audio.briefings.alarm_segments.get(key) is segment:
+            segment["command_pending"] = False
+            if succeeded:
+                segment["dismiss_requested"] = True
 
     async def _alarm_release(
         self, queue_id: str, run_id: str, owner: dict[str, Any],

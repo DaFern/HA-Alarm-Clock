@@ -333,9 +333,10 @@ class AlarmManager:
             if not alarm or not run or run["status"] not in ACTIVE:
                 raise AlarmError("This alarm is not active")
             if phone_token is not None:
+                expected_token = run.get("phone_dismiss_token") if action == "dismiss" else run.get("phone_token")
                 if (not alarm["phone_enabled"] or not isinstance(phone_token, str)
-                        or not isinstance(run.get("phone_token"), str) or not run["phone_token"]
-                        or not secrets.compare_digest(phone_token, run["phone_token"])):
+                        or not isinstance(expected_token, str) or not expected_token
+                        or not secrets.compare_digest(phone_token, expected_token)):
                     raise AlarmError("This phone control is no longer current")
                 if action == "snooze" and (run["status"] != "ringing" or run.get("escalated")):
                     raise AlarmError("This alarm cannot be snoozed now")
@@ -353,6 +354,8 @@ class AlarmManager:
                 raise AlarmError("Unknown alarm action")
             if run.get("phone_token"):
                 run["phone_token"] = uuid.uuid4().hex
+            if action in ("dismiss", "sleep_in") and run.get("phone_dismiss_token"):
+                run["phone_dismiss_token"] = uuid.uuid4().hex
             try:
                 await self._save()
             except Exception:

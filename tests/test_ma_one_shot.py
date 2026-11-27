@@ -481,7 +481,24 @@ class NativeMAContractTests(unittest.TestCase):
     def test_stop_and_pause_cancel_after_existing_permission_checks(self):
         controller = self.candidate['music_assistant/controllers/player_queues/controller.py']
         self.assertEqual(controller.count('self.mass.streams.audio.briefings.cancel_queue(queue_id)'), 3)
-        self.assertEqual(controller.count('self._check_player_permission(queue_id)\n        self.mass.streams.audio.briefings.cancel_queue(queue_id)'), 2)
+        tree = ast.parse(controller)
+        for name in ('stop', 'pause'):
+            method = next(node for node in ast.walk(tree) if isinstance(node, ast.AsyncFunctionDef) and node.name == name)
+            source = ast.unparse(method)
+            self.assertLess(source.index('self._check_player_permission'),
+                            source.index('self._capture_alarm_external_command'))
+            self.assertLess(source.index('self._capture_alarm_external_command'),
+                            source.index('self.mass.streams.audio.briefings.cancel_queue'))
+            self.assertIn('finally:', source)
+            self.assertIn('self._confirm_alarm_external_command(alarm_command, alarm_command_succeeded)', source)
+
+    def test_vendored_stop_pause_fixture_matches_hash_locked_upstream(self):
+        upstream = ast.parse(self.original['music_assistant/controllers/player_queues/controller.py'])
+        pinned = ast.parse('class Host:\n' + (ROOT / 'tests/fixtures/pinned_queue_controls.py.txt').read_text())
+        for name in ('stop', 'pause'):
+            original = next(node for node in ast.walk(upstream) if isinstance(node, ast.AsyncFunctionDef) and node.name == name)
+            fixture = next(node for node in ast.walk(pinned) if isinstance(node, ast.AsyncFunctionDef) and node.name == name)
+            self.assertEqual(ast.dump(original, include_attributes=False), ast.dump(fixture, include_attributes=False))
 
     def test_start_command_preserves_scope_permission_and_queue_lock(self):
         controller = self.candidate['music_assistant/controllers/player_queues/controller.py']

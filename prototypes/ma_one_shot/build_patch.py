@@ -18,6 +18,36 @@ def replace_once(text, old, new):
     return text.replace(old, new, 1)
 
 
+def external_command_hooks(text):
+    """Apply the same guarded Stop/Pause hooks to full sources and pinned fixtures."""
+    text = replace_once(text,
+        "        self._check_player_permission(queue_id)\n        await self._handle_stop(queue_id)",
+        "        self._check_player_permission(queue_id)\n"
+        "        alarm_command = self._capture_alarm_external_command(queue_id)\n"
+        "        self.mass.streams.audio.briefings.cancel_queue(queue_id)\n"
+        "        alarm_command_succeeded = False\n"
+        "        try:\n"
+        "            await self._handle_stop(queue_id)\n"
+        "            alarm_command_succeeded = True\n"
+        "        finally:\n"
+        "            self._confirm_alarm_external_command(alarm_command, alarm_command_succeeded)")
+    text = replace_once(text,
+        "        self._check_player_permission(queue_id)\n        # cancel any pending play_index calls for this queue to prevent conflicts",
+        "        self._check_player_permission(queue_id)\n"
+        "        alarm_command = self._capture_alarm_external_command(queue_id)\n"
+        "        self.mass.streams.audio.briefings.cancel_queue(queue_id)\n"
+        "        # cancel any pending play_index calls for this queue to prevent conflicts")
+    text = replace_once(text,
+        "        await self.mass.players._handle_cmd_pause(queue_id)\n",
+        "        alarm_command_succeeded = False\n"
+        "        try:\n"
+        "            await self.mass.players._handle_cmd_pause(queue_id)\n"
+        "            alarm_command_succeeded = True\n"
+        "        finally:\n"
+        "            self._confirm_alarm_external_command(alarm_command, alarm_command_succeeded)\n")
+    return text
+
+
 def candidates(checkout):
     lock = json.loads((HERE / "upstream.json").read_text())
     original = {}
@@ -54,12 +84,7 @@ def candidates(checkout):
     rel = "music_assistant/controllers/player_queues/controller.py"
     text = replace_once(original[rel],
         "    committed_index,\n", "    build_queue_item,\n    committed_index,\n")
-    text = replace_once(text,
-        "        self._check_player_permission(queue_id)\n        await self._handle_stop(queue_id)",
-        "        self._check_player_permission(queue_id)\n        self.mass.streams.audio.briefings.cancel_queue(queue_id)\n        await self._handle_stop(queue_id)")
-    text = replace_once(text,
-        "        self._check_player_permission(queue_id)\n        # cancel any pending play_index calls for this queue to prevent conflicts",
-        "        self._check_player_permission(queue_id)\n        self.mass.streams.audio.briefings.cancel_queue(queue_id)\n        # cancel any pending play_index calls for this queue to prevent conflicts")
+    text = external_command_hooks(text)
     text = replace_once(text,
         "from music_assistant.helpers.uri import parse_uri\n",
         "from music_assistant.helpers.one_shot_briefing import (\n"

@@ -280,16 +280,18 @@ class AlarmMusic:
                 suspended=self.run.get("music_ramp_suspended", False))
             while True:
                 state = await self.control("status")
-                if not state["owned"]:
-                    self.takeover = True
-                    await self._persist(music_blocked=True, error="Music playback changed elsewhere. Other audio was left alone; dismiss this alarm to finish.")
-                    await self.restore_queue_modes()
-                    return
+                if state.get("command_pending") is True:
+                    # Stop/Pause is in flight after ownership was cleared. Do not
+                    # turn that intermediate state into a permanent takeover block.
+                    await asyncio.sleep(2)
+                    continue
                 speaker = self.manager.hass.states.get(self.alarm["speaker"])
-                if (state.get("state") == "paused" and speaker and speaker.state == "paused"
+                confirmed_pause = state["owned"] and state.get("state") == "paused" and speaker and speaker.state == "paused"
+                if ((state.get("dismiss_requested") is True or confirmed_pause)
                         and self.server_resolver(self.manager.hass, self.alarm["speaker"]) == self.alarm["music_server"]):
-                    # Pause is dismissal, not Snooze. Both MA ownership and HA's
-                    # speaker state must confirm it; idle/offline is not intent.
+                    # Explicit run-scoped companion intent survives ownership
+                    # release. The legacy pause path still requires ownership
+                    # plus HA's paused state; idle/offline alone is never intent.
                     dismissed = await self.manager.async_action(self.alarm["id"], "dismiss",
                         expected_music_run=(self.run, self.attempt))
                     if dismissed:
@@ -299,6 +301,11 @@ class AlarmMusic:
                         if not self.run.get("music_attempt"):
                             await self._persist(error="", music_blocked=False)
                         self.manager.changed()
+                    return
+                if not state["owned"]:
+                    self.takeover = True
+                    await self._persist(music_blocked=True, error="Music playback changed elsewhere. Other audio was left alone; dismiss this alarm to finish.")
+                    await self.restore_queue_modes()
                     return
                 warning = await ramp.tick()
                 if ramp.suspended and not self.run.get("music_ramp_suspended"):

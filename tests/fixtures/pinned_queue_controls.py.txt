@@ -1,0 +1,54 @@
+    @api_command("player_queues/stop", required_scope=Scope.QUEUES_CONTROL)
+    async def stop(self, queue_id: str) -> None:
+        """
+        Handle STOP command for given queue.
+
+        - queue_id: queue_id of the playerqueue to handle the command.
+        """
+        self._check_player_permission(queue_id)
+        await self._handle_stop(queue_id)
+
+    @api_command("player_queues/pause", required_scope=Scope.QUEUES_CONTROL)
+    async def pause(self, queue_id: str) -> None:
+        """
+        Handle PAUSE command for given queue.
+
+        - queue_id: queue_id of the playerqueue to handle the command.
+        """
+        self._check_player_permission(queue_id)
+        # cancel any pending play_index calls for this queue to prevent conflicts
+        self.mass.cancel_timer(f"queue_play_index_{queue_id}")
+        self._set_transitioning(queue_id, False)
+        if not (queue := self.get(queue_id)):
+            return
+        queue_active = queue.active
+        if queue.active and queue.state == PlaybackState.PLAYING:
+            queue.resume_pos = int(queue.corrected_elapsed_time)
+        # Use internal handler to avoid circular redirect
+        # (cmd_pause redirects to queue.pause, which calls cmd_pause again)
+        await self.mass.players._handle_cmd_pause(queue_id)
+
+        async def _watch_pause(player: Player) -> None:
+            count = 0
+            # wait for pause
+            while count < 5 and player.state.playback_state == PlaybackState.PLAYING:
+                count += 1
+                await asyncio.sleep(1)
+            # wait for unpause
+            if player.state.playback_state != PlaybackState.PAUSED:
+                return
+            count = 0
+            while count < 30 and player.state.playback_state == PlaybackState.PAUSED:
+                count += 1
+                await asyncio.sleep(1)
+            # if player is still paused when the limit is reached, send stop
+            if player.state.playback_state == PlaybackState.PAUSED:
+                await self.stop(queue_id)
+
+        # we auto stop a player from paused when its paused for 30 seconds
+        if (
+            queue_active
+            and (queue_player := self.mass.players.get_player(queue_id))
+            and not queue_player.extra_data.get(ATTR_ANNOUNCEMENT_IN_PROGRESS)
+        ):
+            self.mass.create_task(_watch_pause(queue_player))

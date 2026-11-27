@@ -747,6 +747,76 @@ class ScheduledMusicTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.count('alarm_start'), 0)
         self.assertEqual(self.count('alarm_control', 'stop'), 1)
 
+    async def test_generated_companion_pause_to_ha_dismissal_after_ownership_is_cleared(self):
+        import test_ma_test_commands as companion_tests
+        companion = companion_tests.MACommandTests()
+        await companion.asyncSetUp()
+        try:
+            companion.install_generated_queue_controls()
+            await companion.host.alarm_start('Kitchen', 'real-pause', 'library://track/42')
+            await companion.host.pause('Kitchen')
+            self.run.update(music_attempt='real-pause', briefing_attempted=True)
+            async def send(name, **kwargs):
+                return await getattr(companion.host, name.split('/')[-1])(**kwargs)
+            self.client.send_command = send
+            self.delivery = music.AlarmMusic(self.manager, self.alarm, self.run,
+                resolver=self.resolver, server_resolver=self.server_resolver)
+            # MA's run-scoped intent works even if HA has already advanced to idle.
+            self.hass.states.set(self.alarm['speaker'], 'idle')
+            with patch.object(fixture.manager_module, 'AlarmMusic', return_value=self.delivery):
+                self.manager._spawn(self.manager.tasks, self.alarm['id'], self.manager._deliver(self.alarm['id']))
+                self.task = self.manager.tasks[self.alarm['id']]
+                await asyncio.wait_for(asyncio.shield(self.task), 1)
+            self.assertEqual(self.run['status'], 'dismissed')
+            self.assertEqual(self.run['error'], '')
+            self.assertIsNone(self.run['music_attempt'])
+            self.assertFalse(self.manager.owners)
+        finally:
+            companion.doCleanups()
+
+    async def test_pending_external_command_waits_for_confirmation_instead_of_blocking(self):
+        self.run.update(music_attempt='existing', briefing_attempted=True)
+        self.delivery = music.AlarmMusic(self.manager, self.alarm, self.run,
+            resolver=self.resolver, server_resolver=self.server_resolver)
+        original = self.command
+        statuses = 0
+        async def pending_then_confirmed(name, **kwargs):
+            nonlocal statuses
+            if name.endswith('alarm_control') and kwargs['action'] == 'status':
+                statuses += 1
+                return {'protocol': 2, 'owned': False,
+                        'command_pending' if statuses == 1 else 'dismiss_requested': True}
+            if name.endswith('alarm_control') and kwargs['action'] == 'stop':
+                self.calls.append((name, deepcopy(kwargs)))
+                return {'protocol': 2, 'owned': False, 'released': True}
+            return await original(name, **kwargs)
+        self.client.send_command = pending_then_confirmed
+        self.hass.states.set(self.alarm['speaker'], 'idle')
+        with patch.object(fixture.manager_module, 'AlarmMusic', return_value=self.delivery), \
+                patch.object(music.asyncio, 'sleep', new=AsyncMock()):
+            await self.delivery.play()
+        self.assertEqual(statuses, 2)
+        self.assertEqual(self.run['status'], 'dismissed')
+        self.assertFalse(self.run['music_blocked'])
+        self.assertEqual(self.count('alarm_control', 'restore_modes'), 0)
+
+    async def test_false_or_string_external_intent_does_not_dismiss_takeover(self):
+        original = self.command
+        for marker in (False, 'true', 1, None):
+            self.run.update(status='ringing', music_attempt='existing', music_blocked=False)
+            self.owned = False
+            self.delivery = music.AlarmMusic(self.manager, self.alarm, self.run,
+                resolver=self.resolver, server_resolver=self.server_resolver)
+            async def invalid_intent(name, **kwargs):
+                result = await original(name, **kwargs)
+                if kwargs.get('action') == 'status':
+                    result['dismiss_requested'] = marker
+                return result
+            self.client.send_command = invalid_intent
+            await self.delivery.play()
+            self.assertEqual(self.run['status'], 'ringing')
+        self.assertEqual(self.count('alarm_control', 'stop'), 0)
+
     async def test_explicit_dismiss_and_sleep_in_cancel_and_stop_scheduled_playback(self):
         for action, status in (('dismiss', 'dismissed'), ('sleep_in', 'sleeping_in')):
             self.alarm['allow_sleep_in'] = True

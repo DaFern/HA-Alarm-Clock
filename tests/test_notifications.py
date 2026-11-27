@@ -173,15 +173,18 @@ class PhoneControlTests(unittest.IsolatedAsyncioTestCase):
         await self.press(old.replace(self.alarm['id'], 'different-alarm'))
         self.assertEqual(replacement['status'], 'ringing')
 
-    async def test_restart_republishes_with_new_nonce_without_audio(self):
+    async def test_restart_republishes_snooze_nonce_but_keeps_occurrence_dismiss(self):
         await self.sync()
         old = self.action('dismiss')
+        old_snooze = self.action('snooze')
         previous = self.run['phone_token']
         restarted = notifications.AlarmNotifications(self.manager, targets=self.phone.targets)
         await restarted._sync(self.alarm['id'])
         self.assertNotEqual(self.run['phone_token'], previous)
-        await self.press(old)
+        await self.press(old_snooze)
         self.assertEqual(self.run['status'], 'ringing')
+        await self.press(old)
+        self.assertEqual(self.run['status'], 'dismissed')
         self.assertFalse(any(domain == 'media_player' for domain, *_ in self.hass.services.calls))
 
     async def test_unknown_or_ios_target_gets_controls_but_never_android_command(self):
@@ -221,7 +224,9 @@ class PhoneControlTests(unittest.IsolatedAsyncioTestCase):
         await self.sync()
         snapshot = self.manager.snapshot()
         self.assertNotIn('phone_token', snapshot['alarms'][0]['run'])
+        self.assertNotIn('phone_dismiss_token', snapshot['alarms'][0]['run'])
         self.assertNotIn(self.run['phone_token'], str(snapshot))
+        self.assertNotIn(self.run['phone_dismiss_token'], str(snapshot))
 
     async def test_malformed_foreign_and_missing_actions_are_ignored(self):
         await self.sync()
@@ -264,7 +269,7 @@ class PhoneControlTests(unittest.IsolatedAsyncioTestCase):
         await self.sync()
         self.assertEqual(len(self.messages()), before)
 
-    async def test_scheduler_resume_rotates_token_before_delivery_and_stale_button_is_rejected(self):
+    async def test_scheduler_resume_rotates_snooze_token_but_old_dismiss_still_works(self):
         self.run['status'] = 'snoozed'
         await self.sync()
         previous = self.run['phone_token']
@@ -277,7 +282,63 @@ class PhoneControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.run['status'], 'ringing')
         self.assertNotEqual(self.run['phone_token'], previous)
         await self.press(old)
+        self.assertEqual(self.run['status'], 'dismissed')
+
+    async def test_initial_dismiss_survives_snooze_and_resume_even_if_push_update_is_lost(self):
+        await self.sync()
+        original_dismiss = self.action('dismiss')
+        original_snooze = self.action('snooze')
+        await self.press(original_snooze)
+        await self.sync()
+        self.assertEqual(self.action('dismiss'), original_dismiss)
+        now = datetime.now(timezone.utc)
+        self.run['next_ring'] = (now - timedelta(seconds=1)).isoformat()
+        self.alarm['enabled'] = True
+        self.manager._deliver = AsyncMock()
+        await self.manager._tick(now)
+        # The phone still displays the first notification, not the new phase.
+        await self.press(original_dismiss)
+        self.assertEqual(self.run['status'], 'dismissed')
+        await self.press(original_snooze)
+        self.assertEqual(self.run['snoozes'], 1)
+
+    async def test_old_dismiss_also_works_while_snoozed_and_duplicate_is_harmless(self):
+        await self.sync()
+        dismiss = self.action('dismiss')
+        await self.press(self.action('snooze'))
+        await asyncio.gather(self.press(dismiss), self.press(dismiss))
+        self.assertEqual(self.run['status'], 'dismissed')
+        self.assertEqual(self.run['snoozes'], 1)
+
+    async def test_dismiss_token_cannot_be_reused_to_snooze_or_snooze_token_to_dismiss(self):
+        await self.sync()
+        await self.press(self.action('dismiss').replace(':dismiss', ':snooze'))
+        await self.press(self.action('snooze').replace(':snooze', ':dismiss'))
         self.assertEqual(self.run['status'], 'ringing')
+        self.assertEqual(self.run['snoozes'], 0)
+
+    async def test_phone_target_change_invalidates_old_dismiss(self):
+        await self.sync()
+        old = self.action('dismiss')
+        self.alarm['phone_service'] = 'notify.mobile_app_other_phone'
+        await self.sync()
+        new = self.action('dismiss')
+        self.assertNotEqual(old, new)
+        await self.press(old)
+        self.assertEqual(self.run['status'], 'ringing')
+        await self.press(new)
+        self.assertEqual(self.run['status'], 'dismissed')
+
+    async def test_failed_phase_notification_update_does_not_revoke_occurrence_dismiss(self):
+        await self.sync()
+        old = self.action('dismiss')
+        await self.press(self.action('snooze'))
+        self.hass.services.handler = AsyncMock(side_effect=OSError('push unavailable'))
+        with self.assertRaises(OSError):
+            await self.sync()
+        self.hass.services.handler = None
+        await self.press(old)
+        self.assertEqual(self.run['status'], 'dismissed')
 
     async def test_worker_is_background_and_shutdown_cancels_pending_push(self):
         gate = asyncio.Event()

@@ -49,9 +49,9 @@ def tag_for(alarm_id, run):
 
 
 class AlarmNotifications:
-    """Serialize updates and rotate persisted capabilities for every state change.
+    """Serialize updates with occurrence-scoped Dismiss and phase-scoped Snooze.
 
-    Action tokens are scoped to the exact active occurrence/phase. Anyone with
+    Action tokens are scoped to the exact active occurrence (and phase for Snooze). Anyone with
     access to the selected phone's lock screen can use its buttons by design.
     """
 
@@ -128,7 +128,7 @@ class AlarmNotifications:
             if run and run.get("phone_target"):
                 if previous != (run["phone_target"], tag):
                     await self._clear(run["phone_target"], tag)
-                await self._persist(alarm_id, run, phone_target="", phone_token="")
+                await self._persist(alarm_id, run, phone_target="", phone_token="", phone_dismiss_token="")
             return
         if run.get("phone_target") and run["phone_target"] != target and previous != (run["phone_target"], tag):
             await self._clear(run["phone_target"], tag)
@@ -138,13 +138,17 @@ class AlarmNotifications:
         if self.last.get(alarm_id) == fingerprint:
             return
         token = uuid.uuid4().hex
-        if not await self._persist(alarm_id, run, phone_token=token, phone_target=target):
+        dismiss_token = run.get("phone_dismiss_token")
+        if not dismiss_token or run.get("phone_target") != target:
+            dismiss_token = uuid.uuid4().hex
+        if not await self._persist(alarm_id, run, phone_token=token, phone_target=target,
+                                   phone_dismiss_token=dismiss_token):
             return
         # A phase change during persistence must not publish stale controls.
         if run["status"] != fingerprint[1] or run["snoozes"] != fingerprint[2]:
             self.dirty = True
             return
-        actions = [{"action": f"{PREFIX}:{alarm_id}:{token}:dismiss", "title": "Dismiss", "authenticationRequired": False}]
+        actions = [{"action": f"{PREFIX}:{alarm_id}:{dismiss_token}:dismiss", "title": "Dismiss", "authenticationRequired": False}]
         if snooze:
             actions.append({"action": f"{PREFIX}:{alarm_id}:{token}:snooze", "title": f"Snooze {alarm['snooze_minutes']} min", "authenticationRequired": False})
         data = {"tag": tag, "channel": "HA-AlarmClock controls", "importance": "high",

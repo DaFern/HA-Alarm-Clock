@@ -1,6 +1,7 @@
 """Execute the proposed MA test command bodies with fake controllers, not a server."""
 
 import asyncio
+import ast
 from enum import StrEnum
 from pathlib import Path
 import sys
@@ -331,7 +332,142 @@ class MACommandTests(unittest.IsolatedAsyncioTestCase):
         result = await self.host.alarm_capabilities('Kitchen')
         self.assertEqual(result['protocol'], 2)
         self.assertIn('speech_delay', result['features'])
+        self.assertIn('external_command_dismissal', result['features'])
         self.assertFalse(self.calls)
+
+    def install_generated_queue_controls(self):
+        """Run the actual patched upstream Stop/Pause, not a status-response fake."""
+        # Exact upstream methods are vendored so CI/app-runtime tests don't need
+        # the developer's local pristine checkout. The source contract below
+        # verifies the fixture against the hash-locked upstream when available.
+        source = (fixture.ROOT / 'tests/fixtures/pinned_queue_controls.py.txt').read_text()
+        tree = ast.parse('class Host:\n' + fixture.builder.external_command_hooks(source))
+        methods = [node for node in ast.walk(tree)
+                   if isinstance(node, ast.AsyncFunctionDef) and node.name in ('stop', 'pause')]
+        namespace = {'PlaybackState': State, 'ATTR_ANNOUNCEMENT_IN_PROGRESS': 'announcement',
+                     'asyncio': asyncio}
+        for method in methods:
+            method.decorator_list = []
+            exec('from __future__ import annotations\n' + ast.unparse(method), namespace)
+            setattr(self.host, method.name, types.MethodType(namespace[method.name], self.host))
+        self.queue.active = True
+        self.host.mass.cancel_timer = lambda *args: None
+        self.host._set_transitioning = lambda *args: None
+        # Avoid the unrelated 30-second upstream watcher; dispatch below is real.
+        self.player.extra_data = {'announcement': True}
+        async def pause(queue_id):
+            self.queue.state = self.player.state.playback_state = State.PAUSED
+        self.host.mass.players._handle_cmd_pause = pause
+
+    async def test_generated_pause_and_stop_preserve_exact_run_dismiss_intent_after_owner_loss(self):
+        self.install_generated_queue_controls()
+        for action in ('pause', 'stop'):
+            run = 'external-' + action
+            await self.host.alarm_start('Kitchen', run, 'library://track/22')
+            await getattr(self.host, action)('Kitchen')
+            self.assertIsNone(self.mixer.owner('Kitchen', run, self.data.session_id))
+            status = await self.host.alarm_control('Kitchen', run, 'status')
+            self.assertEqual(status, {'protocol': 2, 'owned': False, 'dismiss_requested': True})
+            # Retrying status/restart must not consume intent or revive playback.
+            self.assertEqual(await self.host.alarm_control('Kitchen', run, 'restart'), status)
+            self.assertEqual(await self.host.alarm_control('Kitchen', run, 'status'), status)
+            await self.host.alarm_control('Kitchen', run, 'stop')
+
+    async def test_generated_pause_pending_state_prevents_transient_takeover_block(self):
+        self.install_generated_queue_controls()
+        await self.host.alarm_start('Kitchen', 'pending', 'library://track/22')
+        entered, finish = asyncio.Event(), asyncio.Event()
+        original = self.host.mass.players._handle_cmd_pause
+        async def wait_for_dispatch(queue_id):
+            entered.set()
+            await finish.wait()
+            await original(queue_id)
+        self.host.mass.players._handle_cmd_pause = wait_for_dispatch
+        task = asyncio.create_task(self.host.pause('Kitchen'))
+        try:
+            await entered.wait()
+            status = await self.host.alarm_control('Kitchen', 'pending', 'status')
+            self.assertEqual(status, {'protocol': 2, 'owned': False, 'command_pending': True})
+            self.assertEqual(await self.host.alarm_control('Kitchen', 'pending', 'restart'), status)
+        finally:
+            finish.set()
+            await task
+        self.assertTrue((await self.host.alarm_control('Kitchen', 'pending', 'status'))['dismiss_requested'])
+
+    async def test_generated_failed_or_cancelled_pause_does_not_confirm_dismissal(self):
+        self.install_generated_queue_controls()
+        for index, error in enumerate((ValueError('dispatch failed'), asyncio.CancelledError())):
+            run = f'failed-{index}'
+            await self.host.alarm_start('Kitchen', run, 'library://track/22')
+            async def fail(*args):
+                raise error
+            self.host.mass.players._handle_cmd_pause = fail
+            with self.assertRaises(type(error)):
+                await self.host.pause('Kitchen')
+            self.assertEqual(await self.host.alarm_control('Kitchen', run, 'status'),
+                             {'protocol': 2, 'owned': False})
+
+    async def test_generated_permission_denial_never_records_external_intent(self):
+        self.install_generated_queue_controls()
+        await self.host.alarm_start('Kitchen', 'permission', 'library://track/22')
+        self.denied = True
+        with self.assertRaises(PermissionError):
+            await self.host.pause('Kitchen')
+        self.denied = False
+        self.assertEqual(await self.host.alarm_control('Kitchen', 'permission', 'status'),
+                         {'protocol': 2, 'owned': True, 'state': 'playing'})
+
+    async def test_generated_failed_stop_never_confirms_dismissal(self):
+        self.install_generated_queue_controls()
+        await self.host.alarm_start('Kitchen', 'failed-stop', 'library://track/22')
+        async def fail(*args):
+            raise ValueError('stop dispatch failed')
+        self.host._handle_stop = fail
+        with self.assertRaises(ValueError):
+            await self.host.stop('Kitchen')
+        self.assertEqual(await self.host.alarm_control('Kitchen', 'failed-stop', 'status'),
+                         {'protocol': 2, 'owned': False})
+
+    async def test_group_or_source_takeover_does_not_capture_explicit_dismissal(self):
+        self.install_generated_queue_controls()
+        await self.host.alarm_start('Kitchen', 'group', 'library://track/22')
+        for field, value in (('active_source', 'other'), ('active_group', 'other'),
+                             ('synced_to', 'other'), ('type', 'group'),
+                             ('group_members', ['one', 'two'])):
+            previous = getattr(self.player.state, field)
+            setattr(self.player.state, field, value)
+            self.assertIsNone(self.host._capture_alarm_external_command('Kitchen'))
+            setattr(self.player.state, field, previous)
+
+    async def test_takeover_disconnect_and_natural_idle_are_not_external_commands(self):
+        await self.host.alarm_start('Kitchen', 'natural', 'library://track/22')
+        self.queue.state = State.IDLE
+        self.assertNotIn('dismiss_requested', await self.host.alarm_control('Kitchen', 'natural', 'status'))
+        self.mixer.cancel_queue('Kitchen')
+        self.assertEqual(await self.host.alarm_control('Kitchen', 'natural', 'status'),
+                         {'protocol': 2, 'owned': False})
+
+    async def test_generated_pause_on_different_item_never_dismisses_previous_alarm(self):
+        self.install_generated_queue_controls()
+        await self.host.alarm_start('Kitchen', 'old-item', 'library://track/22')
+        user = types.SimpleNamespace(queue_item_id='user', uri='library://track/3')
+        self.data.items.append(user)
+        self.queue.current_item = user
+        await self.host.pause('Kitchen')
+        self.assertEqual(await self.host.alarm_control('Kitchen', 'old-item', 'status'),
+                         {'protocol': 2, 'owned': False})
+
+    async def test_external_intent_never_applies_to_another_run(self):
+        self.install_generated_queue_controls()
+        await self.host.alarm_start('Kitchen', 'first', 'library://track/22')
+        await self.host.pause('Kitchen')
+        await self.host.alarm_start('Kitchen', 'second', 'library://track/22')
+        self.assertEqual(await self.host.alarm_control('Kitchen', 'second', 'status'),
+                         {'protocol': 2, 'owned': True, 'state': 'playing'})
+        before = list(self.positions)
+        await self.host.alarm_control('Kitchen', 'first', 'stop')
+        self.assertEqual(self.positions, before)
+        self.assertEqual(self.queue.state, State.PLAYING)
 
     async def test_production_preserves_existing_tracks_and_starts_alarm_immediately(self):
         for active in (False, True):
